@@ -100,12 +100,14 @@ tools/
 │   ├── cells.py              cell-name grammar → boolean / sequential models
 │   ├── emit.py               netlist naming → JSON / structural / behavioural Verilog
 │   ├── sim.py                cycle-accurate 2-valued simulator (numpy bit-parallel)
+│   ├── symsim.py             the same simulator over z3 booleans, for SAT proofs
 │   ├── lift.py               shift-register + word-level structure recovery
 │   ├── schematic.py          gate-symbol SVG renderer
 │   └── validate.py           equivalence check vs a DEF + reference netlist
 ├── puzzle/                 APPLICATION — the Star Battle solver, built on gds2v
 │   ├── analyze.py            recover the FSM / counters / region map
 │   ├── solve.py              solve, verify on the netlist, write solution.vcd
+│   ├── prove.py              SAT proofs: uniqueness, message completeness
 │   ├── visualize.py          floorplan / region / logo figures
 │   └── vcdtool.py            read + write the puzzle's VCD traces
 ├── tests/                  ALL tests + fixtures
@@ -127,13 +129,13 @@ dependencies from `pyproject.toml`:
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt   # editable install of gds2v + puzzle
-.\.venv\Scripts\python.exe tests\test_regression.py             # ~4 min; expect "47/47 checks passed"
+.\.venv\Scripts\python.exe tests\test_regression.py             # ~5 min; expect "53/53 checks passed"
 ```
 
 The install makes `gds2v` and `puzzle` importable from anywhere and registers the
 `python -m gds2v` CLI, so nothing depends on your current directory.
 
-(A fresh run reports **47/47**. The 48th check is the third-party Caravel suite, which is
+(A fresh run reports **53/53**. The 54th check is the third-party Caravel suite, which is
 skipped until you fetch its ~160 MB fixtures — see [Testing](#testing).)
 
 | package | used for |
@@ -144,6 +146,7 @@ skipped until you fetch its ~160 MB fixtures — see [Testing](#testing).)
 | `vcdvcd` | VCD parsing |
 | `networkx` | flop dependency graph, SCCs, logic cones, levelisation |
 | `matplotlib` | schematic and placement figures |
+| `z3-solver` | SAT proofs: answer uniqueness, message-set completeness |
 
 > **Two Windows environment traps (both cost real debugging time):**
 > - **Run from PowerShell, not the Bash/MSYS shell.** That shell's profile loads the nRF
@@ -301,6 +304,7 @@ The extractor never crashes on a valid file and never claims more than it proved
 | [`gds2v/cells.py`](gds2v/cells.py) | cell-name grammar → boolean/sequential models; blackbox fallback |
 | [`gds2v/emit.py`](gds2v/emit.py) | netlist naming + JSON / structural / behavioural Verilog |
 | [`gds2v/sim.py`](gds2v/sim.py) | cycle-accurate 2-valued simulator (numpy bit-parallel) |
+| [`gds2v/symsim.py`](gds2v/symsim.py) | the same simulation code path over z3 booleans, for SAT proofs |
 | [`gds2v/lift.py`](gds2v/lift.py) | shift-register + word-level structure recovery, self-verified |
 | [`gds2v/schematic.py`](gds2v/schematic.py) | gate-symbol SVG renderer |
 | [`gds2v/validate.py`](gds2v/validate.py) | equivalence check vs a DEF + reference netlist |
@@ -312,6 +316,7 @@ package, each module runnable as `python -m puzzle.<name>`:
 |---|---|---|
 | [`puzzle/analyze.py`](puzzle/analyze.py) | `python -m puzzle.analyze` | recover the FSM / region structure |
 | [`puzzle/solve.py`](puzzle/solve.py) | `python -m puzzle.solve` | solve the Star Battle, write `solution.vcd` |
+| [`puzzle/prove.py`](puzzle/prove.py) | `python -m puzzle.prove` | SAT proofs: uniqueness, message-set completeness, floating-net independence |
 | [`puzzle/visualize.py`](puzzle/visualize.py) | `python -m puzzle.visualize` | floorplan / region / logo figures |
 | [`puzzle/vcdtool.py`](puzzle/vcdtool.py) | `python -m puzzle.vcdtool <vcd>` | read + write VCD traces |
 
@@ -320,7 +325,7 @@ package, each module runnable as `python -m puzzle.<name>`:
 ## Testing
 
 ```powershell
-.\.venv\Scripts\python.exe tests\test_regression.py -v   # ~4 min → 47/47, or 48/48 with Caravel fetched
+.\.venv\Scripts\python.exe tests\test_regression.py -v   # ~5 min → 53/53, or 54/54 with Caravel fetched
 ```
 
 The regression composes the focused suites in [`tests/`](tests/), each runnable alone
@@ -344,7 +349,8 @@ enable the Caravel suite; it is skipped otherwise.
 - **Net 293 is genuinely floating** — two `A1` sinks, complete routing, no driver. Not an
   extraction defect: every pin resolves, no net has two drivers, the nearest other net is
   200 nm away. It reaches `O[1]`/`O[4]` but no flop; its only observable effect is one
-  character of the near-miss message. The regression asserts exactly one such net.
+  character of the near-miss message, and `puzzle/prove.py` proves by SAT miter that
+  `success` is independent of it. The regression asserts exactly one such net.
 - **15 `clkbuf_4` cells have unloaded outputs** — clock-tree balancing dummies. The tree is
   coherent: `clk` → one `clkbuf_16` → 16 `clkbuf_8` → 16 leaf nets carrying all 92 flops.
 - **36 `INTERNAL_*` placeholders** sit in one row below the die — anonymisation leftovers

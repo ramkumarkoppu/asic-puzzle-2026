@@ -193,6 +193,23 @@ def main(argv=None):
     c.check("behavioural cell models generated",
             os.path.exists(os.path.join(HERE, "out", "puzzle", "cells_sim.v")))
 
+    # ------------------------------------------------- SAT proofs (z3)
+    print("\n== SAT proofs on the circuit (z3) ==")
+    rc, out, dt = run(["-m", "puzzle.prove"])
+    if a.verbose:
+        print(out)
+    c.check("prove.py runs and passes", rc == 0 and "RESULT: PASS" in out, f"{dt:.1f}s")
+    c.check("answer is the only success input (blocking it is UNSAT)",
+            "unique: True" in out)
+    c.check("SAT witness equals the solved answer",
+            "witness matches solution.json: True" in out)
+    c.check("message set proven complete over all 2^121 inputs",
+            "messages proven complete: True" in out)
+    c.check("BIG BANG / EMPTY SKY trigger exclusivity proven",
+            "triggers exclusive: True" in out)
+    c.check("success provably independent of the floating net",
+            "success independent of floating net: True" in out)
+
     # ------------------------------------------ generality (any valid GDS)
     print("\n== generality (arbitrary valid GDS) ==")
     rc, out, dt = run_test("test_generality.py")

@@ -66,22 +66,27 @@ one above.
 ## Messages on `O[7:0]`
 
 One character per clock, starting the cycle after the last input bit. Which string is
-emitted is a pure function of the outcome — verified across hundreds of inputs.
+emitted is a pure function of the outcome — and the list below is **proven complete**:
+`puzzle/prove.py` unrolls the netlist into SAT and repeatedly asks for an input whose
+output window differs from every message found so far, until UNSAT. Over all 2^121
+possible inputs the chip emits exactly these five strings, and nothing else:
 
 | condition | message |
 |---|---|
 | valid solution | `(* TWO STARS *)` |
-| counts all correct but stars touch | `TWO NOT TOUCH` * |
-| all 121 bits set | `BIG BANG` |
-| all 121 bits clear | `EMPTY SKY` |
+| counts all correct but stars touch | `TWO"NOT TOUCH` * |
+| all 121 bits set — and provably nothing else | `BIG BANG` |
+| all 121 bits clear — and provably nothing else | `EMPTY SKY` |
 | anything else | `TRY AGAIN` |
 
-All five branches are reachable and confirmed by simulation. The near-miss branch is
-exercised by placements that satisfy every count but have touching stars — `solve.py`
-finds one and runs it. (*) One character of that message rides on the genuinely floating
-net `n293`: the design emits `TWO"NOT TOUCH` or `TWO NOT TOUCJ` depending on the value
-the floating node happens to settle at — the intended text is obviously `TWO NOT TOUCH`,
-and `success` is unaffected either way.
+The `BIG BANG` and `EMPTY SKY` rows are exclusive by SAT too: asking for either message
+with even one input bit off its pattern is UNSAT. The near-miss branch is exercised by
+placements that satisfy every count but have touching stars — `solve.py` finds one and
+runs it. (*) One character of that message rides on the genuinely floating net `n293`:
+the silicon says `TWO"NOT TOUCH` (n293=0) or `TWO NOT TOUCJ` (n293=1), and the message
+enumeration proves the clean text `TWO NOT TOUCH` is unreachable at either polarity.
+The intended reading is the puzzle's other published name, "Two Not Touch"; `success`
+is unaffected either way (see below).
 
 ## The planted hint
 
@@ -95,6 +100,22 @@ trial 1   6b 79 20 61 77 61 69 74 73 20 20   "ky awaits  "
 
 Concatenated: **`"The night sky awaits"`**. Stars. The example stimulus is a signpost to
 the puzzle type, hidden in an encoding the design itself does not use.
+
+## Other easter eggs
+
+All verified directly against the repo files:
+
+- **The VCD is timestamped a leap second.** Its `$date` is `Sat Dec 31 23:59:60 2016` —
+  not a typo; a real leap second was inserted at the end of 2016.
+- **The VCD tells you how to read it.** Its `$version` field, where a tool name belongs,
+  says *"Leave no stone unturned! But for this file, consider looking at it in a
+  waveform viewer instead."* And the raw value-change lines for `O` already spell
+  `TRY AGAIN` (`54 52 59 20 41 47 41 49 4e`), once per failed attempt — the output
+  generator demonstrated before a single gate is extracted.
+- **The warmup compares against 496**, the third perfect number — and the largest that
+  fits in the 9-bit sum of two bytes.
+- **`(* TWO STARS *)` is an OCaml comment.** Jane Street's house language: the winning
+  message is `TWO STARS`, commented out.
 
 ## How this was established
 
@@ -113,9 +134,16 @@ netlist reproduces all **312 cycles of `O[7:0]` and `success` with 0 mismatches*
 `TRY AGAINTRY AGAIN`. That validates extraction, cell models and simulator on the real
 design, not just the warmup.
 
-**The answer.** Verified three independent ways: it satisfies every constraint
+**The answer.** Verified four independent ways: it satisfies every constraint
 combinatorially and is the unique solution; the gate netlist raises `success` and prints
-the winning message; and all 121 single-bit perturbations fail.
+the winning message; all 121 single-bit perturbations fail; and — strongest of all —
+**SAT on the circuit itself proves uniqueness**. `puzzle/prove.py` unrolls the extracted
+netlist symbolically over the full protocol (z3 booleans flowing through the *same*
+`GateSim` code path the VCD replay validated), constrains `success`, and gets exactly one
+model — this answer; blocking it returns UNSAT. That proof does not depend on the Star
+Battle interpretation being right: even if the region map were wrong, the circuit accepts
+this input and no other. A miter over both polarities of the floating net n293 is also
+UNSAT, proving `success` cannot depend on it.
 
 **The recovered Verilog.** Every Verilog file is produced automatically by the tool from
 the GDS: `03_netlist.v` (structural), `04_behavioral.v` (de-synthesised `assign`/`always`
@@ -130,7 +158,7 @@ Reproduce all of it with:
 
 ```powershell
 cd tools
-.\.venv\Scripts\python.exe test_regression.py -v
+.\.venv\Scripts\python.exe tests\test_regression.py -v
 ```
 
 ## Two things worth knowing about the layout
@@ -151,4 +179,5 @@ anywhere. This is a property of the layout, not an extraction defect: every pin 
 resolves, no net has two drivers, and the nearest other net is 200 nm away on every layer.
 It reaches `O[1]` and `O[4]` through 11 gates but no flop. Its one observable effect is a
 single character of the near-miss message (`TWO"NOT TOUCH` vs `TWO NOT TOUCJ` by
-polarity); it cannot affect `success`, the winning message, or any other branch.
+polarity); that `success` cannot depend on it is *proven* — the SAT miter of the two
+polarities in `puzzle/prove.py` is UNSAT at every cycle.

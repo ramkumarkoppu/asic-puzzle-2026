@@ -15,6 +15,7 @@ dependencies = [
     "vcdvcd>=2.3",     # VCD parsing
     "networkx>=3.0",   # flop dependency graph, SCCs, logic cones, levelisation
     "matplotlib>=3.7", # schematic and placement figures
+    "z3-solver>=4.12", # SAT proofs: answer uniqueness, message-set completeness
 ]
 
 [project.scripts]

@@ -4,6 +4,8 @@ Modules (each runnable as ``python -m puzzle.<name>``):
 
     analyze     recover the design's structure (FSM, counters, region map)
     solve       solve the Star Battle, verify on the netlist, write solution.vcd
+    prove       SAT proofs: answer uniqueness, message-set completeness,
+                trigger exclusivity, floating-net independence
     visualize   floorplan / region / logo figures
     vcdtool     read and write the puzzle's VCD traces
 
