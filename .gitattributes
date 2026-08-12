@@ -1,0 +1,6 @@
+# Normalise line endings to LF for text, so the repo is clean across platforms.
+* text=auto eol=lf
+
+# Binary assets (never line-ending-converted or diffed as text).
+*.gds binary
+*.png binary

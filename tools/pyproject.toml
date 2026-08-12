@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asic-gds2v"
+version = "0.3.0"
+description = "Reverse-engineer a sky130 GDSII layout back to Verilog, and solve the Jane Street ASIC puzzle."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "klayout>=0.30",   # LayoutToNetlist connectivity extraction (gdstk cannot do this)
+    "gdstk>=1.0",      # fast GDS reads: placements, polygons, cell census
+    "numpy>=1.24",     # bit-parallel simulation, one lane per stimulus
+    "vcdvcd>=2.3",     # VCD parsing
+    "networkx>=3.0",   # flop dependency graph, SCCs, logic cones, levelisation
+    "matplotlib>=3.7", # schematic and placement figures
+]
+
+[project.scripts]
+gds2v = "gds2v.__main__:main"
+
+# gds2v is the reusable core library; puzzle is the application built on it.
+[tool.setuptools]
+packages = ["gds2v", "puzzle"]

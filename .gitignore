@@ -1,0 +1,64 @@
+# AI assistant / agent tooling — local analysis aids, not part of the puzzle data.
+# `origin` here is the upstream janestreet repo, so none of this belongs in a commit.
+
+# Claude Code
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+
+# OpenAI Codex
+AGENTS.md
+.codex/
+
+# Gemini CLI
+GEMINI.md
+.gemini/
+
+# Cursor
+.cursor/
+.cursorrules
+.cursorignore
+
+# GitHub Copilot
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/
+
+# Windsurf / Codeium
+.windsurf/
+.windsurfrules
+.codeiumignore
+
+# Cline / Roo Code
+.clinerules
+.clinerules/
+.roo/
+.roomodes
+
+# Continue
+.continue/
+
+# Aider
+.aider*
+.aiderignore
+
+# Zed AI
+.rules
+
+# Scratch output from analysis scripts
+scratch/
+*.scratch.py
+
+# Local analysis tooling (tools/ itself is source; its venv and outputs are not).
+# Add `tools/` here too if this repo should stay strictly upstream-clean.
+tools/.venv/
+tools/out/
+tools/*.egg-info/
+__pycache__/
+*.pyc
+
+# Editor config (points the IDE's Python at tools/.venv)
+.vscode/
+
+# Generated solution-run outputs (reproducible via tools/)
+results/

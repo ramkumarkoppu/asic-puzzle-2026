@@ -1,0 +1,7 @@
+# Install the toolchain (editable) plus its dependencies, which are declared in
+# pyproject.toml.  Run from this directory:
+#     .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+#
+# This makes `gds2v` and `puzzle` importable everywhere and installs the CLI, so you
+# can run `python -m gds2v ...` and `python -m puzzle.solve` from anywhere.
+-e .
