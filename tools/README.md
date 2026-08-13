@@ -1,13 +1,17 @@
-# gds2v — reverse-engineer a GDSII layout back to Verilog
+# gds2v — a decompiler for chips
 
-This directory takes a finished chip layout (a `.gds` file — polygons on metal layers,
-no netlist, no source) and recovers, in order:
+This directory takes a finished chip layout (a `.gds` file — literally the polygon
+geometry that would be etched into silicon, with no netlist and no source code) and
+reverse-engineers it the way you'd reverse a stripped binary, recovering in order:
 
-1. a **gate-level netlist** — which standard cell connects to which, on which net;
-2. **simulatable Verilog** — behavioural models so the netlist runs in any simulator;
-3. **de-synthesised RTL** — the same logic as `assign`/`always` blocks;
-4. **lifted RTL** — recovered *structure* (shift registers, `a + b == constant`);
-5. a **gate-symbol schematic** (SVG);
+1. a **gate-level netlist** — which logic gate connects to which (≈ the *disassembly*);
+2. **simulatable Verilog** — so the recovered design runs in any hardware simulator
+   (≈ a runnable *emulator model*);
+3. **de-synthesised RTL** — the same logic as one statement per gate (≈ raw,
+   line-per-instruction *decompiler output*);
+4. **lifted RTL** — recovered *structure*: registers, shift chains, `a + b == constant`
+   (≈ readable *decompiled source*);
+5. a **gate-symbol schematic** (SVG) — the circuit diagram;
 6. a **capability report** stating exactly what was and was not recovered.
 
 It was built to solve the [Jane Street ASIC puzzle](https://blog.janestreet.com/can-you-reverse-engineer-an-asic/)
@@ -20,15 +24,60 @@ Nothing here is puzzle data; the repo root stays source-data-only.
 
 ---
 
+## Hardware, in software terms
+
+If you write C/C++/Python but not Verilog, this mental model is all you need. A
+synchronous digital chip is this program:
+
+```c
+state_t state = RESET_VALUES;          // every bit lives in a "flip-flop" (a 1-bit register)
+while (1) {                            // one iteration per clock tick — always exactly one
+    outputs = pure_function(state, inputs);   // "combinational logic": stateless gate network
+    state   = next_state(state, inputs);      // all registers update TOGETHER at the tick
+}
+```
+
+The loop body isn't executed instruction-by-instruction — all gates evaluate
+*concurrently and continuously* as signals ripple through them, and the clock edge is a
+sample strobe that commits every register's pending value at once (double buffering:
+new state is computed from old state, then the swap is atomic). One loop iteration
+always costs exactly one clock cycle; what limits the clock speed is the deepest chain
+of gates that must settle between ticks (the "critical path").
+
+The jargon used in this README, translated once:
+
+| chip term | closest software concept |
+|---|---|
+| **GDS** | the shipped artifact — but *below* machine code: raw photomask polygons on ~15 layers |
+| **standard cell** | one opcode/intrinsic from a fixed vendor library (`nand2`, `dfrtp` = D flip-flop, …) |
+| **net** | one electrical wire = a connected component of metal polygons; an edge in the circuit graph |
+| **netlist** | the disassembly: every gate instance + every wire between them |
+| **flip-flop ("flop")** | a 1-bit variable in the state struct, updated only at the clock tick |
+| **combinational logic** | the pure, stateless expressions between the state variables |
+| **RTL / Verilog** | the C of hardware: `always @(posedge clk)` = the tick handler, `assign` = a pure expression |
+| **synthesis** | the RTL→gates compiler; like `-O3` + `strip`, it destroys all names and structure |
+| **place & route** | the linker: assigns each gate a coordinate and draws the wires |
+| **PDK / LEF / Liberty** | the vendor BSP: databases of each cell's geometry, pins and function |
+| **DEF** | the linker map file: names + placements + routing, before stripping |
+| **VCD** | a logic-analyzer capture: every signal's value at every timestamp |
+
+The tool's own components map the same way: `sim.py` is an *emulator* for the recovered
+netlist, `symsim.py` runs that same emulator over symbolic values (*symbolic execution*,
+à la KLEE/angr — but exhaustive, since an unrolled circuit is a finite formula), and the
+RTL emitters are the *decompiler back-end*.
+
+---
+
 ## The one idea that makes it work
 
-A GDS is just polygons. Turning polygons back into a netlist normally needs the foundry's
-cell library (LEF/Liberty) to know where each cell's pins are and what each cell does.
+A GDS is just polygons. Turning polygons back into a netlist normally needs the vendor's
+cell database (LEF/Liberty — the "BSP") to know where each cell's pins are and what each
+cell does.
 
 These layouts hand us a shortcut: **every standard cell carries its pin *names* as text
-labels inside its own geometry** (in sky130, on the li1/met1 label layers). So each pin is
-a *probe point* — a coordinate with a known name. That turns extraction into a purely
-geometric procedure needing no PDK:
+labels inside its own geometry** (in sky130, on the li1/met1 label layers). So each pin
+is a *probe point* — a coordinate with a known name. That turns extraction into a purely
+geometric procedure needing no vendor data:
 
 ```
         cell definition in the GDS                 what we read out
@@ -39,20 +88,23 @@ geometric procedure needing no PDK:
         └───────────────────────┘   ("VPWR"/"VGND" = supply, ignored)
 ```
 
-The flow is then:
+The flow is then **union-find over geometry**:
 
 ```
   1. record every leaf-cell instance and its placement transform
   2. flatten the layout so vias and cell interiors become one coordinate space
-  3. let KLayout's LayoutToNetlist merge metal + vias into electrical nets
-  4. for each cell pin: transform its label to global coords, probe_net() it
-  5. the top-level port labels name the external nets
+  3. let KLayout merge touching metal + via polygons into connected components
+     (each component = one wire)
+  4. for each cell pin: transform its label to global coords, ask "which
+     component is this point inside?"
+  5. the top-level port labels name the external wires
 ```
 
 Cells are identified as standard cells by being **leaf cells that carry pin labels** — not
 by any name prefix — so connectivity extracts for any library. What the *cells do* is a
-separate question answered by [`cells.py`](gds2v/cells.py) from the sky130 naming grammar;
-an unknown library still yields connectivity, with functions marked "blackbox".
+separate question answered by [`cells.py`](gds2v/cells.py) from the sky130 naming grammar
+(think: recovering a function's behaviour from its mangled name); an unknown library
+still yields connectivity, with functions marked "blackbox".
 
 > **The subtle trap that cost hours.** `LayoutToNetlist.connect(a, b)` declares *inter*-layer
 > connectivity only. `connect(a)` — a single argument — declares *intra*-layer connectivity.
@@ -81,8 +133,9 @@ flowchart LR
     NL --> VAL
 ```
 
-Each box is one module in [`gds2v/`](gds2v/); the dotted arrows are the *self-checks* — the
-lifted and behavioural RTL are only trusted after they co-simulate against the gate netlist.
+Each box is one module in [`gds2v/`](gds2v/); the dotted arrows are the *self-checks* —
+decompiler output is only trusted after it runs cycle-for-cycle identically to the
+disassembly it came from.
 
 ---
 
@@ -97,15 +150,15 @@ tools/
 │   ├── paths.py              one source of truth for every data path
 │   ├── extract.py            geometry → cells + nets  (+ capability report)
 │   ├── techprofile.py        layer-map profiles: built-in sky130 + auto-detect
-│   ├── cells.py              cell-name grammar → boolean / sequential models
+│   ├── cells.py              cell-name grammar → boolean / register models
 │   ├── emit.py               netlist naming → JSON / structural / behavioural Verilog
-│   ├── sim.py                cycle-accurate 2-valued simulator (numpy bit-parallel)
-│   ├── symsim.py             the same simulator over z3 booleans, for SAT proofs
+│   ├── sim.py                the emulator: cycle-accurate, numpy-parallel across inputs
+│   ├── symsim.py             the same emulator over z3 booleans (symbolic execution)
 │   ├── lift.py               shift-register + word-level structure recovery
 │   ├── schematic.py          gate-symbol SVG renderer
 │   └── validate.py           equivalence check vs a DEF + reference netlist
 ├── puzzle/                 APPLICATION — the Star Battle solver, built on gds2v
-│   ├── analyze.py            recover the FSM / counters / region map
+│   ├── analyze.py            recover the state machine / counters / region map
 │   ├── solve.py              solve, verify on the netlist, write solution.vcd
 │   ├── prove.py              SAT proofs: uniqueness, message completeness
 │   ├── liftrtl.py            emit full readable RTL (07_rtl_lifted.v) + cosim
@@ -147,7 +200,7 @@ both. See [Testing](#testing).)
 | `gdstk` | fast GDS reads: placements, polygons, cell census |
 | `numpy` | bit-parallel simulation, one lane per stimulus |
 | `vcdvcd` | VCD parsing |
-| `networkx` | flop dependency graph, SCCs, logic cones, levelisation |
+| `networkx` | register dependency graph, SCCs, logic cones, topological sort |
 | `matplotlib` | schematic and placement figures |
 | `z3-solver` | SAT proofs: answer uniqueness, message-set completeness |
 
@@ -178,20 +231,21 @@ both. See [Testing](#testing).)
 | `--power` | include `VPWR`/`VGND` connections in the emitted Verilog |
 | `--no-schematic`, `-q` | skip the SVG / quiet mode |
 
-Outputs written to `<outdir>`:
+Outputs written to `<outdir>`, in decompiler order — each file one step further from
+polygons and closer to source:
 
-| file | contents |
-|---|---|
-| `report.txt` | capability report — technology, hierarchy, counts, which stages ran |
-| `01_cells.json` | placed cells: type, coordinates, orientation |
-| `02_nets.json` | nets and their `(instance, pin)` terminals |
-| `03_netlist.json` | canonical machine-readable netlist (consumed by every other stage) |
-| `03_netlist.v` | **structural Verilog** — one cell instance per gate |
-| `04_behavioral.v` | **de-synthesised RTL** — one `assign` per gate, one `always` per flop † |
-| `05_schematic.svg` | **circuit diagram** — IEEE gate symbols, D-flop boxes, inversion bubbles |
-| `06_rtl_recovered.v` | **lifted RTL** — registers + proven word-level functions † |
-| `cells_sim.v` | behavioural models for every cell type used (simulation) † |
-| `extract.log` | run log |
+| file | contents | software analogue |
+|---|---|---|
+| `report.txt` | capability report — technology, hierarchy, counts, which stages ran | the loader's verdict |
+| `01_cells.json` | placed cells: type, coordinates, orientation | symbol table |
+| `02_nets.json` | nets and their `(instance, pin)` terminals | cross-reference table |
+| `03_netlist.json` | canonical machine-readable netlist (consumed by every other stage) | the IR |
+| `03_netlist.v` | **structural Verilog** — one cell instance per gate | assembly listing |
+| `04_behavioral.v` | **de-synthesised RTL** — one `assign` per gate, one `always` per register † | line-per-instruction decompile |
+| `05_schematic.svg` | **circuit diagram** — IEEE gate symbols, D-flop boxes, inversion bubbles | control-flow graph render |
+| `06_rtl_recovered.v` | **lifted RTL** — registers + proven word-level functions † | readable decompiled source |
+| `cells_sim.v` | behavioural models for every cell type used (simulation) † | the recovered "libc" |
+| `extract.log` | run log | — |
 
 † `04`, `06`, `cells_sim.v` need every cell's *function* to be known (recognised library).
 On an unknown library they are skipped with a reason; `03_netlist.v` and the schematic are
@@ -250,15 +304,35 @@ module adder_demo (A, B, S, clk, en, rst_n);
 endmodule
 ```
 
+If you don't read Verilog, here is the same design as the C you'd write — the mapping
+is mechanical:
+
+```c
+struct { uint8_t sr_a, sr_b; } state;          // reg [7:0] = a uint8_t held in flip-flops
+
+void tick(bool A, bool B, bool en, bool rst_n) // always @(posedge clk ...) = the tick handler
+{
+    if (!rst_n)  { state.sr_a = 0; }                          // async reset branch
+    else if (en) { state.sr_a = (state.sr_a << 1) | A; }      // {sr_a[6:0], A} = shift-in
+    /* ...same for sr_b; in hardware BOTH commit simultaneously (double-buffered `<=`) */
+}
+
+bool S(void)                                   // assign = a pure expression, evaluated
+{                                              // continuously, not on the tick
+    return (uint16_t)state.sr_a + state.sr_b == 496;
+}
+```
+
 Compare to the original `warmup/00_source.v`: two `shift_register`s, `assign sum = a + b`,
 `assign eq = (val == 9'd496)`. Same design. The only thing not recovered is the *names*
-(`sr_a` is synthesised; the original was `sr_a`/`a_reg`) — because synthesis destroys names
-and module hierarchy irreversibly. What **is** proven is behavioural equivalence.
+(`sr_a` is synthesised; the original was `sr_a`/`a_reg`) — because synthesis, like an
+optimising compiler plus `strip`, destroys names and module structure irreversibly. What
+**is** proven is behavioural equivalence.
 
 `test_warmup.py` grades this run against all four reference files the warmup ships:
 
 ```
-.\.venv\Scripts\python.exe test_warmup.py
+.\.venv\Scripts\python.exe tests\test_warmup.py
 ...
 22/22 checks passed
 ```
@@ -286,15 +360,17 @@ The extractor never crashes on a valid file and never claims more than it proved
 **Hard limits, stated plainly:**
 
 - **No pin labels → no pins.** Foundry GDS often ships *abstract* cells whose pin geometry
-  lives in a separate LEF. Without labels or LEF, connectivity to cell pins is unrecoverable.
+  lives in a separate LEF file (the vendor database). Without labels or LEF, connectivity
+  to cell pins is unrecoverable — like disassembling with no symbol for any call target.
 - **Unknown library → no functions.** Cell *function* comes from the naming grammar
   ([`cells.py`](gds2v/cells.py), sky130) or a Liberty model. An unfamiliar library still
-  extracts connectivity but its cells stay blackbox.
+  extracts connectivity but its cells stay blackbox — a call graph of opaque functions.
 - **FPGAs are out of scope.** An FPGA design compiles to a *bitstream* configuring fixed
   silicon — there is no GDS of *your* logic to reverse. That is bitstream RE, a different
   problem.
 - **Names are never recoverable.** Synthesis is many-to-one; original signal/module names
-  and hierarchy are gone. Equivalence *up to renaming* is the strongest true claim.
+  and hierarchy are gone. Equivalence *up to renaming* is the strongest true claim — the
+  same limit any decompiler has on a stripped binary.
 
 **Performance on large layouts.** Netlist extraction runs multi-threaded, and with
 `--prune-fill` the pruned cells' *geometry* is also dropped before flattening — on
@@ -315,10 +391,10 @@ fires on exact layouts.
 |---|---|
 | [`gds2v/extract.py`](gds2v/extract.py) | GDS → cells + nets; multi-top, hierarchy, arrays, capability report |
 | [`gds2v/techprofile.py`](gds2v/techprofile.py) | layer-map profiles: built-in sky130 + geometry auto-detection |
-| [`gds2v/cells.py`](gds2v/cells.py) | cell-name grammar → boolean/sequential models; blackbox fallback |
+| [`gds2v/cells.py`](gds2v/cells.py) | cell-name grammar → boolean/register models; blackbox fallback |
 | [`gds2v/emit.py`](gds2v/emit.py) | netlist naming + JSON / structural / behavioural Verilog |
-| [`gds2v/sim.py`](gds2v/sim.py) | cycle-accurate 2-valued simulator (numpy bit-parallel) |
-| [`gds2v/symsim.py`](gds2v/symsim.py) | the same simulation code path over z3 booleans, for SAT proofs |
+| [`gds2v/sim.py`](gds2v/sim.py) | the emulator: topological-sort + evaluate per tick, numpy-parallel across stimuli |
+| [`gds2v/symsim.py`](gds2v/symsim.py) | the same emulator code path over z3 booleans — symbolic execution for the SAT proofs |
 | [`gds2v/lift.py`](gds2v/lift.py) | shift-register + word-level structure recovery, self-verified |
 | [`gds2v/schematic.py`](gds2v/schematic.py) | gate-symbol SVG renderer |
 | [`gds2v/validate.py`](gds2v/validate.py) | equivalence check vs a DEF + reference netlist |
@@ -328,7 +404,7 @@ package, each module runnable as `python -m puzzle.<name>`:
 
 | module | run | responsibility |
 |---|---|---|
-| [`puzzle/analyze.py`](puzzle/analyze.py) | `python -m puzzle.analyze` | recover the FSM / region structure |
+| [`puzzle/analyze.py`](puzzle/analyze.py) | `python -m puzzle.analyze` | recover the state machine / region structure |
 | [`puzzle/solve.py`](puzzle/solve.py) | `python -m puzzle.solve` | solve the Star Battle, write `solution.vcd` |
 | [`puzzle/prove.py`](puzzle/prove.py) | `python -m puzzle.prove` | SAT proofs: uniqueness, message-set completeness, power-up + floating-net independence, circuit ⇔ rules |
 | [`puzzle/liftrtl.py`](puzzle/liftrtl.py) | `python -m puzzle.liftrtl` | emit `07_rtl_lifted.v` — full readable RTL, co-simulated cycle-for-cycle vs the netlist |
@@ -362,13 +438,15 @@ enable the Caravel suite; it is skipped otherwise.
 
 ## Notes on `puzzle.gds` (the original target)
 
-- **Net 293 is genuinely floating** — two `A1` sinks, complete routing, no driver. Not an
+- **Net 293 is genuinely floating** — a wire with two gate inputs attached, complete
+  routing, and no driver anywhere (an uninitialised variable, in silicon). Not an
   extraction defect: every pin resolves, no net has two drivers, the nearest other net is
-  200 nm away. It reaches `O[1]`/`O[4]` but no flop; its only observable effect is one
+  200 nm away. It reaches `O[1]`/`O[4]` but no register; its only observable effect is one
   character of the near-miss message, and `puzzle/prove.py` proves by SAT miter that
   `success` is independent of it. The regression asserts exactly one such net.
 - **15 `clkbuf_4` cells have unloaded outputs** — clock-tree balancing dummies. The tree is
-  coherent: `clk` → one `clkbuf_16` → 16 `clkbuf_8` → 16 leaf nets carrying all 92 flops.
+  coherent: `clk` → one `clkbuf_16` → 16 `clkbuf_8` → 16 leaf nets carrying all 92
+  flip-flops.
 - **36 `INTERNAL_*` placeholders** sit in one row below the die — anonymisation leftovers
   with no real geometry.
 
