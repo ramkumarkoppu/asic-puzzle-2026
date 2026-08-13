@@ -22,6 +22,9 @@ connectivity only.  connect(a) -- single argument -- declares *intra*-layer
 connectivity.  Without the latter, touching polygons on the same layer stay separate
 nets and the extraction silently fragments.
 """
+import os
+import time
+
 import klayout.db as db
 import networkx as nx
 
@@ -114,12 +117,13 @@ class Extraction:
         for (l, _dt) in self.profile.pin_label_layers + self.profile.port_label_layers:
             self._PREFER.setdefault(l, self.profile.prefer_region_of(l))
 
+        t = time.time()
         classes = self._classify_cells(ly)
         self.cell_classes = classes
         self.instances, hier = self._collect_instances(ly, top, classes)
         nlog = len(self.instances)
         self._say(f"  leaf standard-cell instances: {nlog}"
-                  f"  (hierarchy: {hier})")
+                  f"  (hierarchy: {hier}, {time.time() - t:.1f}s)")
         if not self.instances:
             self._warn("no labelled standard-cell instances found; "
                        "cannot recover a pin-level netlist from this file")
@@ -129,12 +133,36 @@ class Extraction:
         self._say(f"  distinct top-level port labels: "
                   f"{len({p[0] for p in self.port_labels})}")
 
-        top.flatten(-1, True)
-        self.layout, self.topcell = ly, top
-        self.l2n, self.regions = self._build_l2n(ly, top)
+        # With prune_physical, also drop the pruned cells' GEOMETRY before the
+        # flatten: their polygons touch only the power rails (that is the premise of
+        # pruning them), yet on fill-dominated dies they are the bulk of what the
+        # netlist extractor would otherwise chew through.  Signal nets are unaffected;
+        # supply rails may fragment where fill straps sat, which pruning already
+        # accepts.
+        if self.prune_physical and self._pruned_cellnames:
+            cleared = 0
+            for c in ly.each_cell():
+                if c.name in self._pruned_cellnames:
+                    c.clear()
+                    cleared += 1
+            self._say(f"  cleared geometry of {cleared} pruned cell definitions")
 
+        # The explicit flatten is load-bearing: probing transformed cell-pin label
+        # points against the un-flattened hierarchy resolves a handful of pins
+        # differently (verified: the puzzle partition changes without it).
+        t = time.time()
+        top.flatten(-1, True)
+        self._say(f"  flatten: {time.time() - t:.1f}s")
+        self.layout, self.topcell = ly, top
+        t = time.time()
+        self.l2n, self.regions = self._build_l2n(ly, top)
+        self._say(f"  connectivity extraction: {time.time() - t:.1f}s"
+                  f" ({self._l2n_threads} threads)")
+
+        t = time.time()
         if self.instances:
             self._probe(cell_pins)
+            self._say(f"  pin probing: {time.time() - t:.1f}s")
         else:
             self.nets, self.misses = [], []
         self._finish_report(top, prof_report, hier)
@@ -212,26 +240,48 @@ class Extraction:
         """
         insts = []
         pruned = 0
+        # per-cell-name decision, computed once: 'keep' / 'skip' / 'prune' / 'walk'.
+        # On fill-dominated dies (Caravel: 487k placements) the walk visits every
+        # placement, so per-instance name matching would dominate the runtime.
+        decision = {}
+
+        def decide(child):
+            name = child.name
+            d = decision.get(name)
+            if d is None:
+                if not child.is_leaf():
+                    d = "walk"
+                else:
+                    cls = classes.get(name, "unlabeled")
+                    if cls == "unlabeled":
+                        d = "skip"
+                    elif (self.prune_physical and cls == "physical"
+                            and any(h in name.lower() for h in _PRUNE_HINT)):
+                        d = "prune"
+                    else:
+                        d = "keep"
+                decision[name] = d
+            return d
 
         def walk(cell, trans):
             nonlocal pruned
             for inst in cell.each_inst():
                 child = inst.cell
+                d = decide(child)
+                if d == "skip":
+                    continue
+                if d == "prune":
+                    pruned += inst.size() if inst.is_regular_array() else 1
+                    continue
                 for et in self._iter_element_trans(inst):
                     gt = trans * et
-                    if child.is_leaf():
-                        cls = classes.get(child.name, "unlabeled")
-                        if cls == "unlabeled":
-                            continue
-                        if (self.prune_physical and cls == "physical"
-                                and any(h in child.name.lower() for h in _PRUNE_HINT)):
-                            pruned += 1
-                            continue
+                    if d == "keep":
                         insts.append((child.name, gt))
                     else:
                         walk(child, gt)
 
         walk(top, db.ICplxTrans())
+        self._pruned_cellnames = {n for n, d in decision.items() if d == "prune"}
         if self.prune_physical and pruned:
             self._say(f"  pruned {pruned} decap/tap/fill placements")
 
@@ -297,6 +347,10 @@ class Extraction:
 
     def _build_l2n(self, ly, top):
         l2n = db.LayoutToNetlist(db.RecursiveShapeIterator(ly, top, []))
+        # netlist extraction parallelises well; cap at 8 to stay polite on big boxes
+        self._l2n_threads = 1
+        if hasattr(l2n, "threads"):
+            l2n.threads = self._l2n_threads = min(os.cpu_count() or 1, 8)
         regions = {}
         for name, lnum in self.profile.conductors:
             parts = []
@@ -339,6 +393,17 @@ class Extraction:
             n = self.l2n.probe_net(self.regions[rn], pt)
             if n is not None:
                 return n
+        # Fallback for sloppy layouts whose label anchor sits just off the pin shape
+        # (seen in some PDK conversions).  Only reached when the exact point missed,
+        # so exact layouts are bit-for-bit unaffected.
+        for d in (5, 25):       # dbu steps: 5 nm, 25 nm at 1 nm dbu
+            for dx, dy in ((d, 0), (-d, 0), (0, d), (0, -d)):
+                jpt = db.Point(pt.x + dx, pt.y + dy)
+                for rn in order:
+                    n = self.l2n.probe_net(self.regions[rn], jpt)
+                    if n is not None:
+                        self._fallback_hits += 1
+                        return n
         return None
 
     @staticmethod
@@ -357,6 +422,7 @@ class Extraction:
         and unioning the results repairs that without modelling cell internals.
         """
         self.misses = []
+        self._fallback_hits = 0
         pin_keys, key_obj = {}, {}
 
         for d in self.instances:
@@ -415,6 +481,9 @@ class Extraction:
             named += 1
 
         self._say(f"  pin labels landing on >1 net fragment (merged): {multi}")
+        if self._fallback_hits:
+            self._say(f"  labels resolved only by near-point fallback: "
+                      f"{self._fallback_hits}")
         self._say(f"  nets: {len(self.nets)}; unresolved pins: {len(self.misses)}")
         self._say(f"  named nets from labels: {named}")
 

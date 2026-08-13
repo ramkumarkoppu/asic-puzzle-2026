@@ -425,26 +425,41 @@ class Lifter:
 
 _VERILOG_KW = {"module", "endmodule", "input", "output", "reg", "wire", "assign",
                "always", "posedge", "negedge", "or", "if", "else", "begin", "end",
-               "timescale", "ns", "ps", "rev"}
+               "case", "endcase", "default", "function", "endfunction", "integer",
+               "for", "timescale", "ns", "ps", "rev"}
 
 
 def lint_verilog(text):
     """Every identifier used must be declared - catches missing wires/aliases.
 
-    Understands only the constructs the lifter emits. Returns the undeclared set.
+    Understands only the constructs the lifters emit (lift.py and puzzle/liftrtl.py:
+    port/net declarations, functions, integer loop variables). Returns the
+    undeclared set.
     """
     import re
     body = "\n".join(l.split("//")[0] for l in text.splitlines()
                      if not l.strip().startswith(("//", "`")))
     declared = set()
-    for m in re.finditer(r"\b(?:input|output|reg|wire)\s*(?:\[\d+:\d+\])?\s+"
-                         r"([A-Za-z_]\w*)", body):
-        declared.add(m.group(1))
-    for m in re.finditer(r"\bmodule\s+(\w+)", body):
-        declared.add(m.group(1))
+    decl_res = (
+        # input/output [reg|wire|integer] [range] name
+        r"\b(?:input|output|inout)\s+(?:reg\s+|wire\s+|integer\s+)?"
+        r"(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)",
+        # reg/wire [range] name[, name...]
+        r"\b(?:reg|wire)\s+(?:\[[^\]]+\]\s*)?"
+        r"([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
+        # integer name[, name...]
+        r"\binteger\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)",
+        # function [range] name
+        r"\bfunction\s+(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)",
+        r"\bmodule\s+(\w+)",
+    )
+    for pat in decl_res:
+        for m in re.finditer(pat, body):
+            for name in m.group(1).split(","):
+                declared.add(name.strip())
     used = set(re.findall(r"[A-Za-z_]\w*", body))
     return {u for u in used - declared - _VERILOG_KW if not u.isdigit()
-            and not re.fullmatch(r"b[01]+|d\d+", u)}
+            and not re.fullmatch(r"[bodh][0-9a-fA-F]+", u)}
 
 
 def verify_shift_semantics(sim, lifter, stimulus):

@@ -15,6 +15,14 @@ directly on the CIRCUIT, with no reliance on the recovered Star Battle interpret
                    (each with one bit negated is UNSAT)
   * independence - `success` cannot depend on the floating net (miter of the two
                    polarities is UNSAT)
+  * power-up     - the 4 dfxtp flops have no reset pin, so their silicon power-up
+                   state is unknown; a miter with those 4 initial values free proves
+                   `success` and the message window do not depend on them
+  * semantics    - `success` is EXACTLY "valid Star Battle on the recovered region
+                   map" (XOR of the circuit and the rules is UNSAT), and the
+                   near-miss message fires EXACTLY when all counts are right but two
+                   stars touch - which also proves the recovered region map is the
+                   silicon's map
 
 The unroll reuses GateSim._step and CellModel.eval verbatim via gds2v.symsim, so the
 formula is built by the same code the VCD replay validated; every SAT witness is also
@@ -41,12 +49,12 @@ TOUCH_RE = re.compile(r"TWO.NOT TOUC.")
 MAX_MESSAGES = 12               # enumeration bound; the proof expects 5
 
 
-def unrolled(sim, ivars, undriven):
+def unrolled(sim, ivars, undriven, init=None):
     """Symbolic run of the puzzle protocol: reset, 121 bits, TAIL idle cycles."""
     stim = [{"rst_n": ZERO, "enable": ZERO, "I": ZERO}] * RESET_CYCLES
     stim += [{"rst_n": ONE, "enable": ONE, "I": iv} for iv in ivars]
     stim += [{"rst_n": ONE, "enable": ZERO, "I": ZERO}] * TAIL
-    return symbolic_run(sim, stim, OUTS, undriven=undriven)
+    return symbolic_run(sim, stim, OUTS, undriven=undriven, init=init)
 
 
 def window_of(trace):
@@ -68,6 +76,35 @@ def decode(window_bytes):
 
 def bits_of_model(model, ivars):
     return "".join("1" if model_bit(model, iv) else "0" for iv in ivars)
+
+
+def star_battle_rules(ivars, region_map):
+    """The puzzle rules as z3 constraints over the 121 input bits.
+
+    -> (counts_ok, touching): every row/column/region holds exactly 2 stars; some
+    two stars are orthogonally or diagonally adjacent.  Valid = counts_ok & ~touching.
+    """
+    n = len(region_map)
+    b = [iv.v for iv in ivars]
+    cons = []
+    for r in range(n):
+        cons.append(z3.PbEq([(b[r * n + c], 1) for c in range(n)], 2))
+    for c in range(n):
+        cons.append(z3.PbEq([(b[r * n + c], 1) for r in range(n)], 2))
+    groups = {}
+    for r, row in enumerate(region_map):
+        for c, ch in enumerate(row):
+            groups.setdefault(ch, []).append(b[r * n + c])
+    for cells_ in groups.values():
+        cons.append(z3.PbEq([(x, 1) for x in cells_], 2))
+    adj = []
+    for r in range(n):
+        for c in range(n):
+            for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+                r2, c2 = r + dr, c + dc
+                if 0 <= r2 < n and 0 <= c2 < n:
+                    adj.append(z3.And(b[r * n + c], b[r2 * n + c2]))
+    return z3.And(cons), z3.Or(adj)
 
 
 def window_equals(window, target_bytes):
@@ -110,7 +147,10 @@ def main(argv=None):
     ok = True
     t0 = time.time()
 
-    expected_bits = json.load(open(a.solution))["bits"]
+    sol = json.load(open(a.solution))
+    expected_bits = sol["bits"]
+    region_map = sol["region_map"]
+    near_bits = sol.get("near_miss", {}).get("bits")
 
     print("== symbolic unroll (both polarities of the floating net) ==")
     sim = GateSim(a.netlist)
@@ -137,6 +177,42 @@ def main(argv=None):
     print(f"   miter over every cycle: {'UNSAT' if indep else 'SAT (!!)'}")
     print(f"   success independent of floating net: {indep}")
 
+    # ------------------------------------------------ power-up independence
+    # dfxtp flops have no reset pin: silicon powers them up in an unknown state,
+    # while the simulator assumes 0.  Free those 4 initial values and miter.
+    print("\n== success / window independent of un-reset flop power-up ==")
+    dfx = [inst["name"] for inst, model, _p in sim.seq
+           if model.base.startswith("dfxtp")]
+    init = {name: Sym(z3.Bool(f"pu{k}")) for k, name in enumerate(dfx)}
+    print(f"   {len(dfx)} dfxtp flops with free power-up state")
+    powerup = True
+    for pol, tr in ((ZERO, tr0), (ONE, tr1)):
+        trU = unrolled(sim, ivars, undriven=pol, init=init)
+        diffs = []
+        for c0, cU in zip(tr0 if pol is ZERO else tr1, trU):
+            a0, aU = c0["success"], cU["success"]
+            if a0.concrete and aU.concrete:
+                if a0.v != aU.v:
+                    diffs.append(z3.BoolVal(True))
+            else:
+                diffs.append(z3.Xor(a0.z3(), aU.z3()))
+        for c0, cU in zip(window_of(tr), window_of(trU)):
+            for b in range(8):
+                x, y = c0[b], cU[b]
+                if x.concrete and y.concrete:
+                    if x.v != y.v:
+                        diffs.append(z3.BoolVal(True))
+                else:
+                    diffs.append(z3.Xor(x.z3(), y.z3()))
+        s = z3.Solver()
+        s.add(z3.Or(diffs) if diffs else z3.BoolVal(False))
+        u = s.check() == z3.unsat
+        powerup &= u
+        print(f"   n293={0 if pol is ZERO else 1}: miter "
+              f"{'UNSAT' if u else 'SAT (!!)'}")
+    ok &= powerup
+    print(f"   independent of power-up state: {powerup}")
+
     # ---------------------------------------------------------- uniqueness
     print("\n== circuit-level uniqueness of the success input ==")
     succ_any = z3.Or([c["success"].z3() for c in tr0 if not c["success"].concrete])
@@ -159,6 +235,29 @@ def main(argv=None):
     ok &= unique
     print(f"   blocking it: {'UNSAT - no second input exists' if unique else 'SAT (!!)'}")
     print(f"   unique: {unique}")
+
+    # ---------------------------------------------------- semantic equivalence
+    # Prove the circuit IS the recovered rules: success fires exactly on a valid
+    # Star Battle over the recovered region map, and the near-miss message fires
+    # exactly when every count is right but two stars touch.  A mismatch in either
+    # direction would be a SAT witness, so UNSAT also certifies the region map.
+    print("\n== circuit <=> recovered rules ==")
+    counts_ok, touching = star_battle_rules(ivars, region_map)
+    s = z3.Solver()
+    s.add(z3.Xor(succ_any, z3.And(counts_ok, z3.Not(touching))))
+    sem_success = s.check() == z3.unsat
+    ok &= sem_success
+    print(f"   success <=> valid Star Battle on the recovered map: {sem_success}")
+    sem_touch = None
+    if near_bits:
+        touch_bytes, _s2, touch_msg = concrete_window(a.netlist, near_bits, 0)
+        win0 = window_of(tr0)
+        s = z3.Solver()
+        s.add(z3.Xor(z3.And(window_equals(win0, touch_bytes)),
+                     z3.And(counts_ok, touching)))
+        sem_touch = s.check() == z3.unsat
+        ok &= sem_touch
+        print(f"   {touch_msg!r} <=> counts ok but stars touching: {sem_touch}")
 
     # ------------------------------------------------- message-set completeness
     print("\n== every message the chip can emit (exhaustive over 2^121 inputs) ==")
@@ -217,6 +316,9 @@ def main(argv=None):
                "messages_complete": complete,
                "triggers_exclusive": exclusive,
                "success_independent_of_floating_net": indep,
+               "independent_of_powerup_state": powerup,
+               "success_iff_valid_star_battle": sem_success,
+               "near_miss_iff_counts_ok_touching": sem_touch,
                "tail_cycles": TAIL},
               open(a.out, "w"), indent=1)
     print(f"\nwrote {a.out}  ({time.time()-t0:.1f}s total)")

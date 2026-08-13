@@ -204,6 +204,7 @@ class GateSim:
 
         total = reset_cycles + n_bits + tail
         o_hist = np.zeros((total, lanes), dtype=np.uint8)
+        s_hist = np.zeros((total, lanes), dtype=bool)
         succ = np.zeros(lanes, dtype=bool)
         for cyc in range(total):
             if cyc < reset_cycles:
@@ -220,12 +221,14 @@ class GateSim:
             for b in range(8):
                 byte |= netv[self.port[f"O[{b}]"]].astype(np.uint8) << b
             o_hist[cyc] = byte
-            succ |= netv[self.port["success"]]
+            s_hist[cyc] = netv[self.port["success"]]
+            succ |= s_hist[cyc]
 
         self.last_state = state
         messages = ["".join(chr(v) for v in o_hist[:, ln] if 32 <= v < 127)
                     for ln in range(lanes)]
-        return {"success": succ, "messages": messages, "O": o_hist, "state": state}
+        return {"success": succ, "messages": messages, "O": o_hist, "S": s_hist,
+                "state": state}
 
 
 def standard_stimulus(bits, reset_cycles=3, tail=40):

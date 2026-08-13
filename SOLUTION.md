@@ -143,16 +143,34 @@ netlist symbolically over the full protocol (z3 booleans flowing through the *sa
 model — this answer; blocking it returns UNSAT. That proof does not depend on the Star
 Battle interpretation being right: even if the region map were wrong, the circuit accepts
 this input and no other. A miter over both polarities of the floating net n293 is also
-UNSAT, proving `success` cannot depend on it.
+UNSAT, proving `success` cannot depend on it; the same for the power-up state of the
+four `dfxtp` flops, which have no reset pin (silicon powers them up arbitrarily — the
+proof shows neither `success` nor the message window can see it). Strongest of all,
+**the circuit provably IS the recovered rules**: XOR of `success` with "valid Star
+Battle on the recovered region map" is UNSAT, and the near-miss message fires exactly
+when every count is right but two stars touch — which certifies the recovered region
+map against the silicon in both directions.
 
 **The recovered Verilog.** Every Verilog file is produced automatically by the tool from
 the GDS: `03_netlist.v` (structural), `04_behavioral.v` (de-synthesised `assign`/`always`
-RTL) and `06_rtl_recovered.v` (lifted RTL — recovers the 12-stage input shift register and
-per-output structure). All are functionally equivalent to the layout, not the original
-source: synthesis is many-to-one, so the designer's names, module hierarchy and coding
-style are irrecoverable. The equivalence is what's proven — by the 0-mismatch VCD replay
-above and an independent **Icarus Verilog** simulation of the extracted netlist on the
-winning input (both raise `success` and print `(* TWO STARS *)`).
+RTL), `06_rtl_recovered.v` (generic lift — the 12-stage input shift register and
+per-output structure) and `07_rtl_lifted.v` (**the complete readable design**: grid
+loader, row/column/region counting over the proven region map, adjacency check, outcome
+classification and message playback, ~215 lines). All are functionally equivalent to the
+layout, not the original source: synthesis is many-to-one, so the designer's names,
+module hierarchy and coding style are irrecoverable. The equivalence is what's proven —
+the 0-mismatch VCD replay above; the full lift co-simulated **cycle-for-cycle against
+the gate netlist** on the answer, the near-miss, both degenerate grids, all 121
+single-bit flips and 2,000 random grids (348,500 cycles, 0 mismatches); and an
+independent **Icarus Verilog** run of all three simulatable artifacts (netlist,
+behavioural, lifted) each raising `success` and printing `(* TWO STARS *)`.
+
+**What the proofs quantify over.** The SAT results range over all 2^121 *inputs*, both
+polarities of the floating net, and every power-up state of the four un-reset flops —
+under the canonical protocol (reset held low 3 cycles, then 121 contiguous bits with
+`enable` high, then idle, as in `example_inputs.vcd`). Behaviour under other protocols
+(enable gaps, mid-stream resets, back-to-back attempts) is validated empirically rather
+than proven: the reference VCD's two consecutive attempts replay with 0 mismatches.
 
 Reproduce all of it with:
 

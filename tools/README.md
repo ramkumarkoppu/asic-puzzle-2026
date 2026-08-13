@@ -108,11 +108,12 @@ tools/
 │   ├── analyze.py            recover the FSM / counters / region map
 │   ├── solve.py              solve, verify on the netlist, write solution.vcd
 │   ├── prove.py              SAT proofs: uniqueness, message completeness
+│   ├── liftrtl.py            emit full readable RTL (07_rtl_lifted.v) + cosim
 │   ├── visualize.py          floorplan / region / logo figures
 │   └── vcdtool.py            read + write the puzzle's VCD traces
 ├── tests/                  ALL tests + fixtures
 │   ├── test_regression.py    the whole pipeline, end to end (run this)
-│   ├── test_{warmup,behavioral,generality,opensource}.py
+│   ├── test_{warmup,behavioral,generality,opensource,iverilog}.py
 │   ├── testutil.py           shared PASS/FAIL bookkeeping
 │   ├── make_test_gds.py      synthetic GDS generator (generality fixtures)
 │   └── fetch_opensource.py   third-party Caravel fixture downloader
@@ -129,14 +130,16 @@ dependencies from `pyproject.toml`:
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt   # editable install of gds2v + puzzle
-.\.venv\Scripts\python.exe tests\test_regression.py             # ~5 min; expect "53/53 checks passed"
+.\.venv\Scripts\python.exe tests\test_regression.py             # ~5 min; expect "60/60 checks passed"
 ```
 
 The install makes `gds2v` and `puzzle` importable from anywhere and registers the
 `python -m gds2v` CLI, so nothing depends on your current directory.
 
-(A fresh run reports **53/53**. The 54th check is the third-party Caravel suite, which is
-skipped until you fetch its ~160 MB fixtures — see [Testing](#testing).)
+(A fresh run reports **60/60**. Two opt-in suites add checks when their prerequisites
+exist: the third-party Caravel suite after fetching its ~160 MB fixtures, and the
+Icarus Verilog cross-check when an `iverilog` executable is found — **62/62** with
+both. See [Testing](#testing).)
 
 | package | used for |
 |---|---|
@@ -293,6 +296,17 @@ The extractor never crashes on a valid file and never claims more than it proved
 - **Names are never recoverable.** Synthesis is many-to-one; original signal/module names
   and hierarchy are gone. Equivalence *up to renaming* is the strongest true claim.
 
+**Performance on large layouts.** Netlist extraction runs multi-threaded, and with
+`--prune-fill` the pruned cells' *geometry* is also dropped before flattening — on
+fill-dominated dies that geometry is the bulk of what the extractor would chew through.
+Caravel's user area (487k placements): **88 s → 4 s (22×)** with a bit-identical net
+partition (verified terminal-for-terminal, and the full Caravel reference suite passes
+unchanged). Signal nets cannot be affected — fill/tap/decap touch only the supply
+rails, which is the premise of pruning them. Per-stage timings (flatten, connectivity,
+probing) are printed on every run. A near-point probe fallback also retries labels
+whose anchor sits just off the pin shape (seen in some PDK conversions); it never
+fires on exact layouts.
+
 ---
 
 ## Module map
@@ -316,7 +330,8 @@ package, each module runnable as `python -m puzzle.<name>`:
 |---|---|---|
 | [`puzzle/analyze.py`](puzzle/analyze.py) | `python -m puzzle.analyze` | recover the FSM / region structure |
 | [`puzzle/solve.py`](puzzle/solve.py) | `python -m puzzle.solve` | solve the Star Battle, write `solution.vcd` |
-| [`puzzle/prove.py`](puzzle/prove.py) | `python -m puzzle.prove` | SAT proofs: uniqueness, message-set completeness, floating-net independence |
+| [`puzzle/prove.py`](puzzle/prove.py) | `python -m puzzle.prove` | SAT proofs: uniqueness, message-set completeness, power-up + floating-net independence, circuit ⇔ rules |
+| [`puzzle/liftrtl.py`](puzzle/liftrtl.py) | `python -m puzzle.liftrtl` | emit `07_rtl_lifted.v` — full readable RTL, co-simulated cycle-for-cycle vs the netlist |
 | [`puzzle/visualize.py`](puzzle/visualize.py) | `python -m puzzle.visualize` | floorplan / region / logo figures |
 | [`puzzle/vcdtool.py`](puzzle/vcdtool.py) | `python -m puzzle.vcdtool <vcd>` | read + write VCD traces |
 
@@ -325,7 +340,7 @@ package, each module runnable as `python -m puzzle.<name>`:
 ## Testing
 
 ```powershell
-.\.venv\Scripts\python.exe tests\test_regression.py -v   # ~5 min → 53/53, or 54/54 with Caravel fetched
+.\.venv\Scripts\python.exe tests\test_regression.py -v   # ~5 min → 60/60 (+2 opt-in: Caravel, iverilog → 62/62)
 ```
 
 The regression composes the focused suites in [`tests/`](tests/), each runnable alone
@@ -337,6 +352,7 @@ The regression composes the focused suites in [`tests/`](tests/), each runnable 
 | `tests/test_behavioral.py` | emitted `04_behavioral.v` *text* re-parses and co-simulates identically |
 | `tests/test_generality.py` | arbitrary-GDS handling / honest degradation (14 checks) |
 | `tests/test_opensource.py` | Caravel: netlist partition + RTL behaviour match the published files |
+| `tests/test_iverilog.py` | every emitted puzzle RTL passes under Icarus Verilog (opt-in) |
 
 Shared PASS/FAIL bookkeeping is in [`tests/testutil.py`](tests/testutil.py). Fetch the
 third-party fixtures once with `python tests\fetch_opensource.py` (~160 MB, git-ignored) to

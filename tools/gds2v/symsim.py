@@ -74,12 +74,15 @@ class SymOps:
     inv = staticmethod(_inv)
 
 
-def symbolic_run(sim, stimulus, outputs, undriven=ZERO):
+def symbolic_run(sim, stimulus, outputs, undriven=ZERO, init=None):
     """Unroll `sim` (a GateSim) over `stimulus`, symbolically.
 
     stimulus: iterable of {input_port: Sym} dicts, one per clock cycle.
     outputs:  port names to sample after each edge.
     undriven: the Sym driven onto floating nets each cycle (a constant or a free Bool).
+    init:     {flop instance name: Sym} overriding that flop's power-up value - e.g.
+              free Bools for flops with no reset pin, whose silicon power-up state is
+              genuinely unknown.
     -> list of {port: Sym} dicts, one per cycle.
 
     Uses GateSim._step directly, so cycle semantics (settle, capture with async
@@ -88,6 +91,8 @@ def symbolic_run(sim, stimulus, outputs, undriven=ZERO):
     ops = SymOps
     netv = [ZERO] * sim.n_nets
     state = sim._reset_state(ops)
+    if init:
+        state.update(init)
     out = []
     for inp in stimulus:
         state = sim._step(netv, state, ops, inp, undriven)

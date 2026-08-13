@@ -209,6 +209,36 @@ def main(argv=None):
             "triggers exclusive: True" in out)
     c.check("success provably independent of the floating net",
             "success independent of floating net: True" in out)
+    c.check("success/window independent of un-reset flop power-up state",
+            "independent of power-up state: True" in out)
+    c.check("success <=> valid Star Battle on the recovered map (SAT)",
+            "success <=> valid Star Battle on the recovered map: True" in out)
+    c.check("near-miss message <=> counts ok but stars touching (SAT)",
+            "<=> counts ok but stars touching: True" in out)
+
+    # ------------------------------------------------------- full RTL lift
+    print("\n== full RTL lift (07_rtl_lifted.v) ==")
+    rc, out, dt = run(["-m", "puzzle.liftrtl"])
+    if a.verbose:
+        print(out)
+    c.check("liftrtl.py runs and passes", rc == 0 and "RESULT: PASS" in out,
+            f"{dt:.1f}s")
+    c.check("lifted RTL co-simulates cycle-for-cycle with the netlist",
+            "cosim exact: True" in out)
+    c.check("lifted RTL lint-clean", "lint clean: True" in out)
+    c.check("07_rtl_lifted.v exists",
+            os.path.exists(os.path.join(HERE, "out", "puzzle", "07_rtl_lifted.v")))
+
+    # ------------------------------------- independent simulator (opt-in)
+    rc, out, dt = run_test("test_iverilog.py")
+    if "SKIP" in out:
+        print("\n== iverilog cross-check == (skipped: no iverilog found)")
+    else:
+        print("\n== iverilog cross-check ==")
+        if a.verbose:
+            print(out)
+        c.check("test_iverilog.py: netlist + behavioural + lifted RTL all pass "
+                "under Icarus", rc == 0 and "3/3 checks passed" in out, f"{dt:.1f}s")
 
     # ------------------------------------------ generality (any valid GDS)
     print("\n== generality (arbitrary valid GDS) ==")
