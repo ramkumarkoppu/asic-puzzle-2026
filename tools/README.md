@@ -14,7 +14,7 @@ reverse-engineers it the way you'd reverse a stripped binary, recovering in orde
 5. a **gate-symbol schematic** (SVG) — the circuit diagram;
 6. a **capability report** stating exactly what was and was not recovered.
 
-It was built to solve the [Jane Street ASIC puzzle](https://blog.janestreet.com/can-you-reverse-engineer-an-asic/)
+It is built to solve the [Jane Street ASIC puzzle](https://blog.janestreet.com/can-you-reverse-engineer-an-asic/)
 (that answer is in [`../SOLUTION.md`](../SOLUTION.md)), but the extractor is not
 puzzle-specific: it works on **any valid GDS**, and where full recovery is impossible it
 degrades honestly instead of guessing. It reproduces the published netlist and RTL of a
@@ -48,9 +48,10 @@ The jargon used in this README, translated once:
 
 | chip term | closest software concept |
 |---|---|
-| **GDS** | the shipped artifact — but *below* machine code: raw photomask polygons on ~15 layers |
-| **standard cell** | one opcode/intrinsic from a fixed vendor library (`nand2`, `dfrtp` = D flip-flop, …) |
-| **net** | one electrical wire = a connected component of metal polygons; an edge in the circuit graph |
+| **GDS** | the chip's *Gerber files*: per-layer photomask polygons, no netlist — below machine code |
+| **standard cell** | one opcode/intrinsic from a fixed vendor library (`nand2`, `dfrtp` = D flip-flop, …); its definition is the *footprint drawing* |
+| **net** | one electrical wire = a *copper island*: a connected component of metal polygons; an edge in the circuit graph |
+| **via** | the chip's PCB-via: a metal plug that makes layer N touch layer N+1 |
 | **netlist** | the disassembly: every gate instance + every wire between them |
 | **flip-flop ("flop")** | a 1-bit variable in the state struct, updated only at the clock tick |
 | **combinational logic** | the pure, stateless expressions between the state variables |
@@ -70,14 +71,18 @@ RTL emitters are the *decompiler back-end*.
 
 ## The one idea that makes it work
 
-A GDS is just polygons. Turning polygons back into a netlist normally needs the vendor's
-cell database (LEF/Liberty — the "BSP") to know where each cell's pins are and what each
-cell does.
+**A GDS is to a chip what Gerber files are to a PCB**: per-layer copper polygons plus
+via locations, and *no netlist*. So the task is one you may know from board bring-up:
+*given only the Gerbers and each component's footprint drawing, reconstruct the
+schematic*. On a PCB you would compute which copper islands are connected, then check
+which component pins land on which island. That is exactly what the extractor does —
+standard cells are the components, and their pin labels are the footprint pinout.
 
-These layouts hand us a shortcut: **every standard cell carries its pin *names* as text
-labels inside its own geometry** (in sky130, on the li1/met1 label layers). So each pin
-is a *probe point* — a coordinate with a known name. That turns extraction into a purely
-geometric procedure needing no vendor data:
+Normally, knowing where each cell's pins sit requires the vendor's cell database
+(LEF/Liberty — the "BSP"). These layouts hand us a shortcut: **every standard cell
+carries its pin *names* as text labels inside its own geometry** (in sky130, on the
+li1/met1 label layers). Each pin is a *probe point* — a coordinate with a known name —
+so extraction is purely geometric, no vendor data needed:
 
 ```
         cell definition in the GDS                 what we read out
@@ -88,17 +93,38 @@ geometric procedure needing no vendor data:
         └───────────────────────┘   ("VPWR"/"VGND" = supply, ignored)
 ```
 
-The flow is then **union-find over geometry**:
+The flow, annotated:
 
 ```
-  1. record every leaf-cell instance and its placement transform
-  2. flatten the layout so vias and cell interiors become one coordinate space
-  3. let KLayout merge touching metal + via polygons into connected components
-     (each component = one wire)
-  4. for each cell pin: transform its label to global coords, ask "which
-     component is this point inside?"
-  5. the top-level port labels name the external wires
+  1. INVENTORY THE COMPONENTS   A GDS is a scene graph: cell definitions (footprint
+     drawings, in local coordinates) referenced by placements.  Record every
+     placement: type + position + rotation/mirror.  (The puzzle: 1,618 of them.)
+  2. BAKE ONE COORDINATE SPACE  Routing lives at the top level, but pin metal lives
+     inside the cell definitions.  Flatten — expand every reference through its
+     transform, like inlining all calls — so every polygon has absolute coordinates.
+  3. BLOB DETECTION             Touching metal is the same wire; a via is a plug that
+     makes layer N touch layer N+1.  Flood-fill all polygons across the six metal
+     layers into connected components.  Each island = one wire ("net").
+  4. PROBE THE PINS             Push each placed cell's pin-label point through its
+     placement transform, then point-in-polygon: which island contains it?  That
+     island is the pin's net.
+  5. NAME THE OUTSIDE WORLD     Top-level labels ("clk", "I", "O[0]", "success") sit
+     on the package-pin metal; whatever island each lands on takes that name.
 ```
+
+One probe, concretely:
+
+```
+  instance #17: NAND2 placed at (100, 50)
+      label "Y" at local (2.1, 0.8)  →  global (102.1, 50.8)  →  inside island #42
+  instance #23: DFF placed at (140, 50)
+      label "D" at local (0.9, 1.1)  →  global (140.9, 51.1)  →  inside island #42
+  ⇒ gate 17's output drives flip-flop 23's D input — one edge of the netlist graph
+```
+
+Repeat for all ~6,000 pin labels and the full circuit graph falls out: for every gate,
+`pin → net`. Internal wire names are gone forever (stripped, like a binary without
+symbols); the external ports keep their real names via step 5.
 
 Cells are identified as standard cells by being **leaf cells that carry pin labels** — not
 by any name prefix — so connectivity extracts for any library. What the *cells do* is a
