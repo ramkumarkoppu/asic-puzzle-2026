@@ -179,6 +179,7 @@ tools/
 │   ├── extract.py            geometry → cells + nets  (+ capability report)
 │   ├── techprofile.py        layer-map profiles: built-in sky130 + auto-detect
 │   ├── cells.py              cell-name grammar → boolean / register models
+│   ├── llmassist.py          opt-in LLM fallback: propose → verify → register
 │   ├── emit.py               netlist naming → JSON / structural / behavioural Verilog
 │   ├── sim.py                the emulator: cycle-accurate, numpy-parallel across inputs
 │   ├── symsim.py             the same emulator over z3 booleans (symbolic execution)
@@ -231,6 +232,7 @@ both. See [Testing](#testing).)
 | `networkx` | register dependency graph, SCCs, logic cones, topological sort |
 | `matplotlib` | schematic and placement figures |
 | `z3-solver` | SAT proofs: answer uniqueness, message-set completeness |
+| `anthropic` *(optional extra)* | the `--llm-assist` fallback only — install with `pip install -e .[llm]` |
 
 > **Two Windows environment traps (both cost real debugging time):**
 > - **Run from PowerShell, not the Bash/MSYS shell.** That shell's profile loads the nRF
@@ -262,6 +264,25 @@ both. See [Testing](#testing).)
 | `-m, --module <name>` | override the emitted module name (default = top cell) |
 | `--power` | include `VPWR`/`VGND` connections in the emitted Verilog |
 | `--no-schematic`, `-q` | skip the SVG / quiet mode |
+
+### The LLM fallback is optional at every layer
+
+`--llm-assist` can never affect the core flow. Three independent guarantees:
+
+1. **Off by default.** Without the flag, no LLM code runs and no network
+   connection is ever made — unknown cells stay blackbox with the honest
+   "function stages skipped" report, exactly as before the feature existed.
+2. **Dormant even when enabled.** The assist fires only when extraction finds
+   cells the naming grammar cannot decode. On recognised libraries (sky130 —
+   the puzzle, the warmup, Caravel) it does nothing even with the flag set.
+3. **Optional dependency.** The `anthropic` SDK is an install extra
+   (`pip install -e .[llm]`); without it, `--llm-assist` degrades to a clear
+   install hint and the run continues with cells as blackbox — never a crash.
+
+Nothing the regression proves involves an LLM: extraction exactness, the VCD
+replay, the SAT proofs and the RTL equivalences are all LLM-free. The one
+regression check that touches `llmassist.py` exercises the deterministic
+verification gate with a fake transport — no network, no key required.
 
 Outputs written to `<outdir>`, in decompiler order — each file one step further from
 polygons and closer to source:
@@ -439,6 +460,7 @@ fires on exact layouts.
 | [`gds2v/extract.py`](gds2v/extract.py) | GDS → cells + nets; multi-top, hierarchy, arrays, capability report |
 | [`gds2v/techprofile.py`](gds2v/techprofile.py) | layer-map profiles: built-in sky130 + geometry auto-detection |
 | [`gds2v/cells.py`](gds2v/cells.py) | cell-name grammar → boolean/register models; blackbox fallback |
+| [`gds2v/llmassist.py`](gds2v/llmassist.py) | opt-in LLM fallback for unknown libraries: propose functions, verify against observed pins, register as hypotheses |
 | [`gds2v/emit.py`](gds2v/emit.py) | netlist naming + JSON / structural / behavioural Verilog |
 | [`gds2v/sim.py`](gds2v/sim.py) | the emulator: topological-sort + evaluate per tick, numpy-parallel across stimuli |
 | [`gds2v/symsim.py`](gds2v/symsim.py) | the same emulator code path over z3 booleans — symbolic execution for the SAT proofs |
