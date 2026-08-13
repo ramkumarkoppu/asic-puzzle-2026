@@ -387,9 +387,16 @@ The extractor never crashes on a valid file and never claims more than it proved
 
 **Hard limits, stated plainly:**
 
-- **No pin labels → no pins.** Foundry GDS often ships *abstract* cells whose pin geometry
-  lives in a separate LEF file (the vendor database). Without labels or LEF, connectivity
-  to cell pins is unrecoverable — like disassembling with no symbol for any call target.
+- **No pin labels → no pins (in this tool).** Two distinct cases. If the GDS carries
+  full cell geometry but the labels were stripped, recovery is still *possible* — one
+  abstraction level down: extract transistors from poly/diffusion geometry and
+  pattern-match their topologies back to gates, the way a disassembler recognises
+  `memcpy` in a stripped binary by its code pattern. That transistor-level path is
+  what LVS tools do; this tool deliberately stops at the metal stack and reports the
+  limit instead. But if the GDS ships *abstract* cells — empty shells whose real
+  geometry is withheld and whose pins live only in the vendor's LEF — the information
+  is absent from the file itself (an import stub, not a stripped binary): nothing to
+  disassemble without the LEF.
 - **Unknown library → no functions.** Cell *function* comes from the naming grammar
   ([`cells.py`](gds2v/cells.py), sky130) or a Liberty model. An unfamiliar library still
   extracts connectivity but its cells stay blackbox — a call graph of opaque functions.
