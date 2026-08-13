@@ -58,7 +58,7 @@ The jargon used in this README, translated once:
 | **RTL / Verilog** | the C of hardware: `always @(posedge clk)` = the tick handler, `assign` = a pure expression |
 | **synthesis** | the RTL→gates compiler; like `-O3` + `strip`, it destroys all names and structure |
 | **place & route** | the linker: assigns each gate a coordinate and draws the wires |
-| **PDK / LEF / Liberty** | the vendor BSP: databases of each cell's geometry, pins and function |
+| **PDK / LEF / Liberty** | vendor hardware-*description* files, like an SVD or device tree — pure data, no code: each cell's geometry + pins (LEF ≈ where things are) and function/timing (Liberty ≈ what they do) |
 | **DEF** | the linker map file: names + placements + routing, before stripping |
 | **VCD** | a logic-analyzer capture: every signal's value at every timestamp |
 
@@ -78,8 +78,10 @@ schematic*. On a PCB you would compute which copper islands are connected, then 
 which component pins land on which island. That is exactly what the extractor does —
 standard cells are the components, and their pin labels are the footprint pinout.
 
-Normally, knowing where each cell's pins sit requires the vendor's cell database
-(LEF/Liberty — the "BSP"). These layouts hand us a shortcut: **every standard cell
+Normally, knowing where each cell's pins sit requires the vendor's cell-description
+files (LEF/Liberty — think SVD or device tree: data describing the hardware, which you
+must normally obtain before any tool can work with it). These layouts hand us a
+shortcut: **every standard cell
 carries its pin *names* as text labels inside its own geometry** (in sky130, on the
 li1/met1 label layers). Each pin is a *probe point* — a coordinate with a known name —
 so extraction is purely geometric, no vendor data needed:
