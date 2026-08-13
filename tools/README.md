@@ -211,15 +211,15 @@ dependencies from `pyproject.toml`:
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt   # editable install of gds2v + puzzle
-.\.venv\Scripts\python.exe tests\test_regression.py             # ~5 min; expect "60/60 checks passed"
+.\.venv\Scripts\python.exe tests\test_regression.py             # ~5 min; expect "61/61 checks passed"
 ```
 
 The install makes `gds2v` and `puzzle` importable from anywhere and registers the
 `python -m gds2v` CLI, so nothing depends on your current directory.
 
-(A fresh run reports **60/60**. Two opt-in suites add checks when their prerequisites
+(A fresh run reports **61/61**. Two opt-in suites add checks when their prerequisites
 exist: the third-party Caravel suite after fetching its ~160 MB fixtures, and the
-Icarus Verilog cross-check when an `iverilog` executable is found — **62/62** with
+Icarus Verilog cross-check when an `iverilog` executable is found — **63/63** with
 both. See [Testing](#testing).)
 
 | package | used for |
@@ -252,6 +252,10 @@ both. See [Testing](#testing).)
 |---|---|
 | `--profile sky130 \| auto` | technology profile; default = match a built-in, else auto-detect |
 | `--top <name>` | choose the top cell when a GDS has several |
+| `--llm-assist` | opt-in fallback for unknown libraries: ask a Claude model to propose blackbox cells' functions from their names + observed pins; proposals enter the netlist **only after deterministic verification** and are labelled hypotheses |
+| `--llm-model <id>` | Claude model for the assist (default `claude-opus-5`) |
+| `--llm-api-key <key>` | API key; omit to use `ANTHROPIC_API_KEY` or an `ant auth login` profile (preferred — flags leak into shell history) |
+| `--llm-base-url <url>` | API base URL override (e.g. a corporate gateway) |
 | `--prune-fill` | drop decap/tap/fill before extraction (needed for fill-dominated dies) |
 | `--cone <port>` | also draw the logic cone of one output as a separate schematic |
 | `--def D.def --ref R.v` | validate the result against a DEF + reference netlist |
@@ -397,9 +401,17 @@ The extractor never crashes on a valid file and never claims more than it proved
   geometry is withheld and whose pins live only in the vendor's LEF — the information
   is absent from the file itself (an import stub, not a stripped binary): nothing to
   disassemble without the LEF.
-- **Unknown library → no functions.** Cell *function* comes from the naming grammar
-  ([`cells.py`](gds2v/cells.py), sky130) or a Liberty model. An unfamiliar library still
-  extracts connectivity but its cells stay blackbox — a call graph of opaque functions.
+- **Unknown library → no proven functions.** Cell *function* comes from the naming
+  grammar ([`cells.py`](gds2v/cells.py), sky130) or a Liberty model. An unfamiliar
+  library still extracts connectivity but its cells stay blackbox — a call graph of
+  opaque functions. The opt-in `--llm-assist` fallback can close part of this gap:
+  a Claude model proposes each cell's function from its name and observed pins
+  (foundry naming conventions are exactly the diffuse knowledge LLMs hold), but the
+  LLM is a **hypothesis generator, never a source of truth** — a proposal enters the
+  netlist only if its pin set exactly matches the GDS, it is single-output
+  combinational, and its expression parses over the declared inputs. Everything
+  built on such models is labelled a hypothesis in the capability report; sequential
+  or uncertain cells stay blackbox.
 - **FPGAs are out of scope.** An FPGA design compiles to a *bitstream* configuring fixed
   silicon — there is no GDS of *your* logic to reverse. That is bitstream RE, a different
   problem.
@@ -451,7 +463,7 @@ package, each module runnable as `python -m puzzle.<name>`:
 ## Testing
 
 ```powershell
-.\.venv\Scripts\python.exe tests\test_regression.py -v   # ~5 min → 60/60 (+2 opt-in: Caravel, iverilog → 62/62)
+.\.venv\Scripts\python.exe tests\test_regression.py -v   # ~5 min → 61/61 (+2 opt-in: Caravel, iverilog → 63/63)
 ```
 
 The regression composes the focused suites in [`tests/`](tests/), each runnable alone
@@ -462,6 +474,7 @@ The regression composes the focused suites in [`tests/`](tests/), each runnable 
 | `tests/test_warmup.py` | GDS → netlist/RTL matches all four warmup reference files (22 checks) |
 | `tests/test_behavioral.py` | emitted `04_behavioral.v` *text* re-parses and co-simulates identically |
 | `tests/test_generality.py` | arbitrary-GDS handling / honest degradation (14 checks) |
+| `tests/test_llmassist.py` | LLM-assist verification gate admits/rejects proposals correctly (18 checks, fake transport — no network) |
 | `tests/test_opensource.py` | Caravel: netlist partition + RTL behaviour match the published files |
 | `tests/test_iverilog.py` | every emitted puzzle RTL passes under Icarus Verilog (opt-in) |
 

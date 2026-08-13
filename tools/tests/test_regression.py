@@ -247,6 +247,12 @@ def main(argv=None):
         print(out)
     c.check("test_generality.py: synthetic stress files handled or degraded honestly",
             rc == 0 and "14/14 checks passed" in out, f"{dt:.1f}s")
+    rc, out, dt = run_test("test_llmassist.py")
+    if a.verbose:
+        print(out)
+    c.check("test_llmassist.py: LLM-assist proposals gated deterministically "
+            "(fake transport, no network)",
+            rc == 0 and "18/18 checks passed" in out, f"{dt:.1f}s")
 
     # ------------------------------------------ open-source design (opt-in)
     caravel = os.path.join(HERE, "out", "opensource", "caravel", "user_proj_example.gds")

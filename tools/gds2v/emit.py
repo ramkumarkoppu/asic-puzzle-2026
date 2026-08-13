@@ -175,7 +175,7 @@ def to_behavioral_verilog(nl):
         pins = d["pins"]
         pname = lambda p: netname[pins[p]]
         tag = f"// {d['iname']}"
-        if m.kind in ("SIMPLE", "COMPOUND", "MUX"):
+        if m.kind in ("SIMPLE", "COMPOUND", "MUX", "PROPOSED"):
             out = next(o for o in m.outputs if o in pins)
             assigns.append(f"  assign {pname(out)} = {m.expr(pname)};  {tag}")
         elif m.kind == "TIE":

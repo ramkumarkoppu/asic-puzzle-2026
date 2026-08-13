@@ -224,14 +224,27 @@ def blackbox_model(cell, pins):
     return CellModel(cell, "BLACKBOX", sig, [], cell, {})
 
 
+# Models registered at runtime for cells the naming grammar cannot decode - e.g.
+# verified LLM-assist proposals (see gds2v/llmassist.py).  Consulted before the
+# grammar so every consumer (sim, emit, lift) sees them transparently.
+_REGISTERED = {}
+
+
+def register_model(model):
+    """Make `model` the function of its cell name for this process."""
+    _REGISTERED[model.cell] = model
+
+
 def parse_cell(cell, pins=None):
     """cell name -> CellModel.
 
     Recognises the sky130 standard-cell grammar (all _hd/_hs/_ms/_ls/_hdll variants and
-    the sky130_ef_sc_hd fill family).  On an unrecognised name: if ``pins`` (the pin
-    names seen in the GDS) is given, returns a BLACKBOX model; otherwise raises
-    ValueError.
+    the sky130_ef_sc_hd fill family), plus any model registered at runtime.  On an
+    unrecognised name: if ``pins`` (the pin names seen in the GDS) is given, returns a
+    BLACKBOX model; otherwise raises ValueError.
     """
+    if cell in _REGISTERED:
+        return _REGISTERED[cell]
     base = re.sub(r"_\d+$", "", re.sub(r"^sky130_\w+?_sc_[a-z]+__", "", cell))
 
     if base in PHYS_CELLS or base.startswith(PHYS_CELLS):

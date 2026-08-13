@@ -18,6 +18,10 @@ dependencies = [
     "z3-solver>=4.12", # SAT proofs: answer uniqueness, message-set completeness
 ]
 
+[project.optional-dependencies]
+# Opt-in LLM fallback for unknown libraries (`--llm-assist`): pip install -e .[llm]
+llm = ["anthropic>=0.116"]
+
 [project.scripts]
 gds2v = "gds2v.__main__:main"
 

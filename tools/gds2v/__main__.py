@@ -51,6 +51,22 @@ def parse_args(argv):
                          "from geometry, or omit to match a built-in then fall back to auto")
     ap.add_argument("--top", default=None,
                     help="top cell name (for GDS files with several top cells)")
+    llm = ap.add_argument_group(
+        "LLM assist (fallback for unknown libraries)",
+        "Opt-in: when cells stay blackbox because the library is unrecognised, ask "
+        "a Claude model to propose each cell's function from its name and observed "
+        "pins. Proposals only enter the netlist after deterministic verification "
+        "(pin sets must exactly match the GDS); results are labelled hypotheses.")
+    llm.add_argument("--llm-assist", action="store_true",
+                     help="enable the LLM fallback for blackbox cells")
+    llm.add_argument("--llm-model", default="claude-opus-5",
+                     help="Claude model id (default: claude-opus-5)")
+    llm.add_argument("--llm-api-key", default=None,
+                     help="Anthropic API key; omit to use ANTHROPIC_API_KEY or an "
+                          "`ant auth login` profile (prefer those over a CLI flag - "
+                          "flags leak into shell history)")
+    llm.add_argument("--llm-base-url", default=None,
+                     help="override the API base URL (e.g. a corporate gateway)")
     ap.add_argument("-q", "--quiet", action="store_true")
     return ap.parse_args(argv)
 
@@ -170,15 +186,32 @@ def main(argv=None):
         print("\nnothing further to emit (no standard-cell instances recovered).")
         return 2
 
+    # optional LLM fallback: propose functions for blackbox cells, verify, register
+    if a.llm_assist and e.report["cell_types_blackbox"] > 0:
+        from . import llmassist
+        print("\n--- llm-assist ---")
+        try:
+            transport = llmassist.anthropic_transport(
+                model=a.llm_model, api_key=a.llm_api_key, base_url=a.llm_base_url)
+            result = llmassist.assist(e.instances, transport)
+            note = llmassist.report_note(result, a.llm_model)
+            open(out("report.txt"), "a").write(note)
+            print(note)
+        except Exception as ex:
+            print(f"  llm-assist failed ({ex}); cells stay blackbox")
+
     nl, nl_json = write_netlist_outputs(e, a, out)
 
-    blackbox = e.report["cell_types_blackbox"] > 0
+    # recount AFTER any assist: verified proposals are no longer blackbox
+    from . import llmassist as _la
+    n_blackbox = len(_la.unknown_types(e.instances))
+    blackbox = n_blackbox > 0
     undecl = set()
     if blackbox:
-        print(f"\nfunction-level stages skipped: {e.report['cell_types_blackbox']} "
+        print(f"\nfunction-level stages skipped: {n_blackbox} "
               f"cell type(s) have unknown function (blackbox). Structural netlist and "
               f"schematic are still emitted; behavioural RTL, models, simulation and "
-              f"lifting need a recognised library or a Liberty model.")
+              f"lifting need a recognised library, a Liberty model, or --llm-assist.")
     else:
         undecl = write_function_outputs(e, nl, nl_json, out)
 
