@@ -1,3 +1,9 @@
+> **Solved — this fork contains our solution.** The chip is an 11×11 Star Battle checker;
+> the answer, region map and easter eggs are in [`SOLUTION.md`](SOLUTION.md), the full
+> writeup (approach, tools, proofs, problems) is [`tools/SOLUTION_WRITEUP.md`](tools/SOLUTION_WRITEUP.md),
+> and the reverse-engineering toolchain lives under [`tools/`](tools/). Jane Street's original
+> puzzle README follows unchanged. *Spoilers below.*
+
 # ASIC Reverse-Engineering Puzzle
 
 This repository provides the files for the Jane Street ASIC reverse-engineering puzzle! See the [blog post](https://blog.janestreet.com/can-you-reverse-engineer-an-asic/) for more details.
