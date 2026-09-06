@@ -233,8 +233,16 @@ def main(argv=None):
                "near_miss": {"bits": near_bits, "messages": near_msgs}},
               open(os.path.join(a.outdir, "solution.json"), "w"), indent=1)
 
+    # solution.vcd uses example_inputs.vcd's exact protocol (one idle cycle between
+    # reset release and enable), so embed the response simulated on that protocol -
+    # and require it to win there too (prove.py shows the protocols are equivalent).
     vcd = os.path.join(a.outdir, "solution.vcd")
-    vcdtool.write_vcd(vcd, bits, res, comment="winning input for puzzle.gds")
+    res_vcd = sim.run(standard_stimulus(bits, idle_after_reset=1))
+    vcd_ok = max(x[1] for x in res_vcd) == 1 and message_of(res_vcd) == WIN_MESSAGE
+    ok &= vcd_ok
+    print(f"\n   VCD protocol (reset, 1 idle cycle, 121 bits - as the example): "
+          f"success={max(x[1] for x in res_vcd)}")
+    vcdtool.write_vcd(vcd, bits, res_vcd, comment="winning input for puzzle.gds")
     print(f"\nwrote {a.outdir}/solution.json")
     print(f"wrote {vcd}")
     print(f"\nRESULT: {'PASS' if ok else 'FAIL'}")

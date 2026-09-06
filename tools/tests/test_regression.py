@@ -71,7 +71,7 @@ def main(argv=None):
         c.check("puzzle: 1618 instances, 741 nets",
                 "1618 cells" in out and "741 nets" in out)
         c.check("puzzle: no unresolved pins", "unresolved pins: 0" in out)
-        # one net (293) is genuinely floating in the layout - see README
+        # one net (293) is genuinely floating in the layout - see SOLUTION_WRITEUP.md
         c.check("puzzle: exactly one floating net, as documented",
                 "nets without exactly one driver: 1" in out)
     else:
@@ -112,11 +112,9 @@ def main(argv=None):
     print("\n== cell models ==")
     sys.path.insert(0, HERE)
     from gds2v import cells
-    ok_all = True
     for tag in ("warmup", "puzzle"):
         p = os.path.join(HERE, "out", tag, "03_netlist.json")
         n, probs = cells.check_against_netlist(json.load(open(p)))
-        ok_all &= not probs
         c.check(f"{tag}: derived pin names match all {n} cell types",
                 not probs, str(probs[:2]) if probs else "")
 
@@ -215,6 +213,12 @@ def main(argv=None):
             "success <=> valid Star Battle on the recovered map: True" in out)
     c.check("near-miss message <=> counts ok but stars touching (SAT)",
             "<=> counts ok but stars touching: True" in out)
+    c.check("constant-folded success samples proven all zero",
+            "all zero: True" in out)
+    c.check("flop state provably reaches a fixed point within the tail",
+            "state reaches a fixed point within the tail: True" in out)
+    c.check("example's idle-cycle protocol proven equivalent",
+            "gap and back-to-back protocols provably equivalent: True" in out)
 
     # ------------------------------------------------------- full RTL lift
     print("\n== full RTL lift (07_rtl_lifted.v) ==")

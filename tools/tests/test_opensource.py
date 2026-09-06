@@ -104,7 +104,9 @@ def main(argv=None):
     t0 = time.time()
     e = Extraction(gds, verbose=True, prune_physical=True)
     print(f"  extraction took {time.time() - t0:.0f}s")
-    c.check("extraction completes", True)
+    c.check("extraction completes with instances and nets",
+            len(e.instances) > 0 and len(e.nets) > 0,
+            f"{len(e.instances)} instances, {len(e.nets)} nets")
     c.check("no unresolved pins", not e.misses, f"{len(e.misses)} misses")
     logic = e.logic_instances()
     c.check("~700 signal-bearing cells recovered",

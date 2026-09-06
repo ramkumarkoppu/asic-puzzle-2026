@@ -11,7 +11,7 @@ Pipeline (each stage consumes the previous one's output):
     validate     DEF + reference netlist    ->  equivalence-up-to-renaming proof
     techprofile  layer map                  ->  built-in sky130 or auto-detected stack
 
-Run ``python -m gds2v <file.gds> -o <outdir>`` for the full flow; see README.md.
+Run ``python -m gds2v <file.gds> -o <outdir>`` for the full flow; see SOLUTION_WRITEUP.md.
 """
 from .extract import Extraction
 from .techprofile import TechProfile, SKY130, auto_detect, choose_profile

@@ -74,7 +74,7 @@ class SymOps:
     inv = staticmethod(_inv)
 
 
-def symbolic_run(sim, stimulus, outputs, undriven=ZERO, init=None):
+def symbolic_run(sim, stimulus, outputs, undriven=ZERO, init=None, want_states=False):
     """Unroll `sim` (a GateSim) over `stimulus`, symbolically.
 
     stimulus: iterable of {input_port: Sym} dicts, one per clock cycle.
@@ -83,7 +83,10 @@ def symbolic_run(sim, stimulus, outputs, undriven=ZERO, init=None):
     init:     {flop instance name: Sym} overriding that flop's power-up value - e.g.
               free Bools for flops with no reset pin, whose silicon power-up state is
               genuinely unknown.
-    -> list of {port: Sym} dicts, one per cycle.
+    want_states: also return the post-edge flop state of every cycle (each `_step`
+              builds a fresh dict, so these are true snapshots) - used by prove.py
+              to show the state reaches a fixed point within the unroll horizon.
+    -> list of {port: Sym} dicts, one per cycle; with want_states, (list, states).
 
     Uses GateSim._step directly, so cycle semantics (settle, capture with async
     set/reset, settle again) are exactly those of the concrete simulator.
@@ -93,11 +96,13 @@ def symbolic_run(sim, stimulus, outputs, undriven=ZERO, init=None):
     state = sim._reset_state(ops)
     if init:
         state.update(init)
-    out = []
+    out, states = [], []
     for inp in stimulus:
         state = sim._step(netv, state, ops, inp, undriven)
         out.append({o: netv[sim.port[o]] for o in outputs})
-    return out
+        if want_states:
+            states.append(state)
+    return (out, states) if want_states else out
 
 
 def model_bit(model, sym):

@@ -380,7 +380,11 @@ class Extraction:
                 l2n.connect(cut, regions[up])
                 made = True
             if not made:
-                # no cut geometry on the expected layer: connect where conductors overlap
+                # no cut geometry on the expected layer: connect where conductors
+                # overlap - a guess, so say so (it can invent connectivity on a
+                # malformed GDS; it never fires when the cut layer exists)
+                self._warn(f"cut layer {cname} ({lnum}) has no geometry; "
+                           f"connecting {lo}/{up} wherever they overlap")
                 l2n.connect(regions[lo], regions[up])
         l2n.extract_netlist()
         return l2n, regions

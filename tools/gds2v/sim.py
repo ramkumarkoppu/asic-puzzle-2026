@@ -133,6 +133,9 @@ class GateSim:
         self._settle(netv, ops)
 
         nxt = {}
+        # async set/reset is applied at the capture point, which is exact whenever
+        # RESET_B/SET_B are stable across the cycle - true for every whole-cycle
+        # stimulus used here (the emitted Verilog is genuinely asynchronous)
         for inst, model, pins in self.seq:
             d = netv[pins["D"]]
             if model.base.startswith("dfrtp"):
@@ -231,9 +234,15 @@ class GateSim:
                 "state": state}
 
 
-def standard_stimulus(bits, reset_cycles=3, tail=40):
-    """The protocol the design expects: reset, then 121 bits with enable high, then idle."""
+def standard_stimulus(bits, reset_cycles=3, tail=40, idle_after_reset=0):
+    """The protocol the design expects: reset, then 121 bits with enable high, then idle.
+
+    `idle_after_reset` inserts reset-released/enable-low cycles before the first data
+    bit; `example_inputs.vcd` has exactly one.  prove.py shows the two variants are
+    equivalent for `success` and the message window, so the default stays back-to-back.
+    """
     seq = [(0, 0, 0)] * reset_cycles
+    seq += [(1, 0, 0)] * idle_after_reset
     seq += [(1, 1, int(c)) for c in bits]
     seq += [(1, 0, 0)] * tail
     return seq

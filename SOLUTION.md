@@ -28,9 +28,11 @@ raster of an 11 × 11 grid** — one bit per cell, not a character stream. The d
 . * . * . . . . . . .
 ```
 
-A ready-to-load waveform is at `tools/out/puzzle/solution.vcd`, in the same format as
-`example_inputs.vcd` (1 ps timescale, 10 ns clock, `rst_n` released at 30 ns, `enable`
-asserted at 40 ns for 121 cycles).
+A ready-to-load waveform is at `tools/out/puzzle/solution.vcd`, in the same format and
+protocol as `example_inputs.vcd` (1 ps timescale, 10 ns clock, `rst_n` released at
+30 ns, one idle cycle, `enable` asserted at 40 ns for 121 cycles).  `tools/out/` is
+generated output and not checked in — a fresh clone recreates the file with
+`python -m puzzle.solve` after the setup in `tools/SOLUTION_WRITEUP.md`.
 
 ## What the hardware checks
 
@@ -80,7 +82,8 @@ possible inputs the chip emits exactly these five strings, and nothing else:
 | anything else | `TRY AGAIN` |
 
 The `BIG BANG` and `EMPTY SKY` rows are exclusive by SAT too: asking for either message
-with even one input bit off its pattern is UNSAT. The near-miss branch is exercised by
+with even one input bit off its pattern is UNSAT, at both polarities of the floating
+net. The near-miss branch is exercised by
 placements that satisfy every count but have touching stars — `solve.py` finds one and
 runs it. (*) One character of that message rides on the genuinely floating net `n293`:
 the silicon says `TWO"NOT TOUCH` (n293=0) or `TWO NOT TOUCJ` (n293=1), and the message
@@ -166,11 +169,16 @@ independent **Icarus Verilog** run of all three simulatable artifacts (netlist,
 behavioural, lifted) each raising `success` and printing `(* TWO STARS *)`.
 
 **What the proofs quantify over.** The SAT results range over all 2^121 *inputs*, both
-polarities of the floating net, and every power-up state of the four un-reset flops —
-under the canonical protocol (reset held low 3 cycles, then 121 contiguous bits with
-`enable` high, then idle, as in `example_inputs.vcd`). Behaviour under other protocols
-(enable gaps, mid-stream resets, back-to-back attempts) is validated empirically rather
-than proven: the reference VCD's two consecutive attempts replay with 0 mismatches.
+polarities of the floating net, and every power-up state of the four un-reset flops.
+The unrolled protocol is reset held low 3 cycles, then the 121 bits contiguously with
+`enable` high, then idle — and two closure proofs extend it. A miter proves the variant
+with one idle cycle between reset release and `enable` (the exact timing of
+`example_inputs.vcd` and `solution.vcd`) equivalent: same success set, same message
+window, for every input. And the flop state provably reaches a fixed point within the
+idle tail, so the bounded unroll covers unbounded time. Behaviour under other protocols
+(enable gaps mid-stream, mid-stream resets, back-to-back attempts) is validated
+empirically rather than proven: the reference VCD's two consecutive attempts replay
+with 0 mismatches.
 
 Reproduce all of it with:
 

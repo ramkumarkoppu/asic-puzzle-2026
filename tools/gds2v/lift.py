@@ -372,12 +372,18 @@ class Lifter:
         L.append("")
 
         for r in self.registers:
-            rst = r["rst"] or "rst_n"
-            rv = f"{r['width']}'b" + ("1" * r["width"] if r["set"] else "0")
-            L += [f"  always @(posedge {r['clk']} or negedge {rst})",
-                  f"    if (!{rst}) {r['name']} <= {rv};",
-                  f"    else if ({r['enable']}) {r['name']} <= "
-                  f"{{{r['name']}[{r['width'] - 2}:0], {r['serial']}}};", ""]
+            shift = (f"{r['name']} <= "
+                     f"{{{r['name']}[{r['width'] - 2}:0], {r['serial']}}};")
+            if r["rst"]:
+                rv = f"{r['width']}'b" + ("1" * r["width"] if r["set"] else "0")
+                L += [f"  always @(posedge {r['clk']} or negedge {r['rst']})",
+                      f"    if (!{r['rst']}) {r['name']} <= {rv};",
+                      f"    else if ({r['enable']}) {shift}", ""]
+            else:
+                # no reset pin on these flops: silicon power-up is arbitrary, and the
+                # dynamic verifier treats reset as never asserted - emit the same
+                L += [f"  always @(posedge {r['clk']})   // no reset pin on these flops",
+                      f"    if ({r['enable']}) {shift}", ""]
 
         for t in self.templates:
             cw = sum((1 << w) - 1 for w in t["widths"]).bit_length()

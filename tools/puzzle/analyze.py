@@ -5,8 +5,11 @@ what the design is supposed to be.  Run it and the design identifies itself:
 
   python -m puzzle.analyze [--netlist out/puzzle/03_netlist.json]
 
-Graph work uses networkx; the region map is recovered twice (structurally from the
-2-flop counter SCCs, and empirically by simulating one-hot inputs) and the two must agree.
+Graph work uses networkx.  Counter candidates are nominated structurally (the 2-flop
+SCCs of the flop dependency graph); the cell-to-region assignment is then recovered
+empirically by simulating all 121 one-hot inputs and watching which counter each cell
+increments.  The recovered map is certified against the silicon by SAT in prove.py
+(`success` <=> valid Star Battle on exactly this map).
 """
 import argparse
 import json

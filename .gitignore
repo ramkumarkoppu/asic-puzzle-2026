@@ -62,3 +62,6 @@ __pycache__/
 
 # Generated solution-run outputs (reproducible via tools/)
 results/
+
+# submission form export (contains personal details) - never commit
+/*.pdf

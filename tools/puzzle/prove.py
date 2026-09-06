@@ -12,12 +12,19 @@ directly on the CIRCUIT, with no reliance on the recovered Star Battle interpret
                    (enumerate output windows until UNSAT), for both polarities of the
                    genuinely floating net n293
   * exclusivity  - `BIG BANG` requires all 121 bits set and `EMPTY SKY` all clear
-                   (each with one bit negated is UNSAT)
+                   (each with one bit negated is UNSAT), at both polarities of the
+                   floating net
   * independence - `success` cannot depend on the floating net (miter of the two
                    polarities is UNSAT)
   * power-up     - the 4 dfxtp flops have no reset pin, so their silicon power-up
                    state is unknown; a miter with those 4 initial values free proves
                    `success` and the message window do not depend on them
+  * horizon      - the flop state provably reaches a fixed point within the idle
+                   tail (state[T] != state[T-1] is UNSAT), so the bounded unroll
+                   covers unbounded time under constant idle inputs
+  * protocol     - the example VCD's timing variant (one idle cycle between reset
+                   release and `enable`) is proven equivalent to the back-to-back
+                   unroll: same success set, same message window, for every input
   * semantics    - `success` is EXACTLY "valid Star Battle on the recovered region
                    map" (XOR of the circuit and the rules is UNSAT), and the
                    near-miss message fires EXACTLY when all counts are right but two
@@ -49,12 +56,16 @@ TOUCH_RE = re.compile(r"TWO.NOT TOUC.")
 MAX_MESSAGES = 12               # enumeration bound; the proof expects 5
 
 
-def unrolled(sim, ivars, undriven, init=None):
-    """Symbolic run of the puzzle protocol: reset, 121 bits, TAIL idle cycles."""
+def unrolled(sim, ivars, undriven, init=None, gap=0):
+    """Symbolic run of the puzzle protocol: reset, `gap` idle cycles, 121 bits, TAIL
+    idle cycles.  gap=1 is example_inputs.vcd's exact timing; gap=0 the back-to-back
+    variant (the two are proven equivalent below).  -> (trace, per-cycle flop states).
+    """
     stim = [{"rst_n": ZERO, "enable": ZERO, "I": ZERO}] * RESET_CYCLES
+    stim += [{"rst_n": ONE, "enable": ZERO, "I": ZERO}] * gap
     stim += [{"rst_n": ONE, "enable": ONE, "I": iv} for iv in ivars]
     stim += [{"rst_n": ONE, "enable": ZERO, "I": ZERO}] * TAIL
-    return symbolic_run(sim, stim, OUTS, undriven=undriven, init=init)
+    return symbolic_run(sim, stim, OUTS, undriven=undriven, init=init, want_states=True)
 
 
 def window_of(trace):
@@ -155,10 +166,18 @@ def main(argv=None):
     print("== symbolic unroll (both polarities of the floating net) ==")
     sim = GateSim(a.netlist)
     ivars = [Sym(z3.Bool(f"i{k}")) for k in range(N_BITS)]
-    tr0 = unrolled(sim, ivars, undriven=ZERO)
-    tr1 = unrolled(sim, ivars, undriven=ONE)
+    tr0, st0 = unrolled(sim, ivars, undriven=ZERO)
+    tr1, st1 = unrolled(sim, ivars, undriven=ONE)
     n_sym = sum(1 for cyc in tr0 for s in cyc.values() if not s.concrete)
     print(f"   {len(tr0)} cycles, {n_sym} symbolic samples  ({time.time()-t0:.1f}s)")
+
+    # Constant-folded success samples carry no z3 term, so they silently drop out of
+    # every query below.  Guard that omission: prove each folded sample is 0 (a folded
+    # 1 would be an input-independent success the queries could never see).
+    folded = [c["success"].v for tr in (tr0, tr1) for c in tr if c["success"].concrete]
+    folded_zero = all(v == 0 for v in folded)
+    ok &= folded_zero
+    print(f"   constant-folded success samples: {len(folded)}, all zero: {folded_zero}")
 
     # ---------------------------------------------------- independence (miter)
     print("\n== success is independent of the floating net ==")
@@ -186,8 +205,10 @@ def main(argv=None):
     init = {name: Sym(z3.Bool(f"pu{k}")) for k, name in enumerate(dfx)}
     print(f"   {len(dfx)} dfxtp flops with free power-up state")
     powerup = True
+    st_pu = {}
     for pol, tr in ((ZERO, tr0), (ONE, tr1)):
-        trU = unrolled(sim, ivars, undriven=pol, init=init)
+        trU, st_pu[0 if pol is ZERO else 1] = unrolled(sim, ivars, undriven=pol,
+                                                       init=init)
         diffs = []
         for c0, cU in zip(tr0 if pol is ZERO else tr1, trU):
             a0, aU = c0["success"], cU["success"]
@@ -212,6 +233,61 @@ def main(argv=None):
               f"{'UNSAT' if u else 'SAT (!!)'}")
     ok &= powerup
     print(f"   independent of power-up state: {powerup}")
+
+    # ------------------------------------------------------------ horizon closure
+    # The unroll is finite (TAIL cycles).  Every input is constant during the tail,
+    # so if the full flop state provably repeats at the horizon, each later cycle
+    # replays the last one and the bounded proofs cover unbounded time.
+    print("\n== state fixed point at the unroll horizon ==")
+    fixed = True
+    for label, states in (("n293=0", st0), ("n293=1", st1),
+                          ("n293=0 + free power-up", st_pu[0]),
+                          ("n293=1 + free power-up", st_pu[1])):
+        last, prev = states[-1], states[-2]
+        diffs = []
+        for name in last:
+            x, y = last[name], prev[name]
+            if x.concrete and y.concrete:
+                if x.v != y.v:
+                    diffs.append(z3.BoolVal(True))
+            else:
+                diffs.append(z3.Xor(x.z3(), y.z3()))
+        s = z3.Solver()
+        s.add(z3.Or(diffs) if diffs else z3.BoolVal(False))
+        u = s.check() == z3.unsat
+        fixed &= u
+        print(f"   {label}: state[T] != state[T-1] is "
+              f"{'UNSAT - fixed point' if u else 'SAT (!!)'}")
+    ok &= fixed
+    print(f"   state reaches a fixed point within the tail: {fixed}")
+
+    # ------------------------------------------------- protocol-gap insensitivity
+    # example_inputs.vcd (and solution.vcd) have one idle cycle between reset release
+    # and enable; the unrolls above are back-to-back.  Prove the two protocols agree
+    # for every input and both polarities - same 'ever success', same message window -
+    # so every theorem here transfers to the example's exact timing.
+    print("\n== protocol-gap insensitivity (idle cycle after reset, as the example) ==")
+    gap_ok = True
+    for pol, tr in ((ZERO, tr0), (ONE, tr1)):
+        trG, _stG = unrolled(sim, ivars, undriven=pol, gap=1)
+        diffs = [z3.Xor(z3.Or([c["success"].z3() for c in tr]),
+                        z3.Or([c["success"].z3() for c in trG]))]
+        for c0, cG in zip(window_of(tr), window_of(trG)):
+            for b in range(8):
+                x, y = c0[b], cG[b]
+                if x.concrete and y.concrete:
+                    if x.v != y.v:
+                        diffs.append(z3.BoolVal(True))
+                else:
+                    diffs.append(z3.Xor(x.z3(), y.z3()))
+        s = z3.Solver()
+        s.add(z3.Or(diffs))
+        u = s.check() == z3.unsat
+        gap_ok &= u
+        print(f"   n293={0 if pol is ZERO else 1}: miter "
+              f"{'UNSAT' if u else 'SAT (!!)'}")
+    ok &= gap_ok
+    print(f"   gap and back-to-back protocols provably equivalent: {gap_ok}")
 
     # ---------------------------------------------------------- uniqueness
     print("\n== circuit-level uniqueness of the success input ==")
@@ -293,20 +369,21 @@ def main(argv=None):
     print(f"   messages proven complete: {complete}")
 
     # -------------------------------------------------------- trigger exclusivity
-    print("\n== BIG BANG / EMPTY SKY trigger exclusivity ==")
-    win0 = window_of(tr0)
+    print("\n== BIG BANG / EMPTY SKY trigger exclusivity (both polarities) ==")
     exclusive = True
-    for label, stim_bits, negate in (("BIG BANG", "1" * N_BITS, True),
-                                     ("EMPTY SKY", "0" * N_BITS, False)):
-        target, _succ, msg = concrete_window(a.netlist, stim_bits, 0)
-        s = z3.Solver()
-        s.add(window_equals(win0, target))
-        # at least one bit off the trigger pattern
-        s.add(z3.Or([z3.Not(iv.v) if negate else iv.v for iv in ivars]))
-        u = s.check() == z3.unsat
-        exclusive &= u
-        print(f"   {msg!r} with any {'zero' if negate else 'one'} bit: "
-              f"{'UNSAT - only the exact grid' if u else 'SAT (!!)'}")
+    for pol, tr in ((0, tr0), (1, tr1)):
+        win = window_of(tr)
+        for label, stim_bits, negate in (("BIG BANG", "1" * N_BITS, True),
+                                         ("EMPTY SKY", "0" * N_BITS, False)):
+            target, _succ, msg = concrete_window(a.netlist, stim_bits, pol)
+            s = z3.Solver()
+            s.add(window_equals(win, target))
+            # at least one bit off the trigger pattern
+            s.add(z3.Or([z3.Not(iv.v) if negate else iv.v for iv in ivars]))
+            u = s.check() == z3.unsat
+            exclusive &= u
+            print(f"   n293={pol}: {msg!r} with any {'zero' if negate else 'one'} bit: "
+                  f"{'UNSAT - only the exact grid' if u else 'SAT (!!)'}")
     ok &= exclusive
     print(f"   triggers exclusive: {exclusive}")
 
@@ -319,6 +396,9 @@ def main(argv=None):
                "independent_of_powerup_state": powerup,
                "success_iff_valid_star_battle": sem_success,
                "near_miss_iff_counts_ok_touching": sem_touch,
+               "folded_success_all_zero": folded_zero,
+               "state_fixed_point": fixed,
+               "protocol_gap_insensitive": gap_ok,
                "tail_cycles": TAIL},
               open(a.out, "w"), indent=1)
     print(f"\nwrote {a.out}  ({time.time()-t0:.1f}s total)")

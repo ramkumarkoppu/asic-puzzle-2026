@@ -105,22 +105,27 @@ def expected_from_vcd(path):
 
 
 # ---------------------------------------------------------------- writing
-def write_vcd(path, bits, results=None, reset_cycles=3, tail=40, comment=""):
-    """Write a stimulus VCD in exactly the format of example_inputs.vcd.
+def write_vcd(path, bits, results=None, reset_cycles=3, tail=40, idle_after_reset=1,
+              comment=""):
+    """Write a stimulus VCD in exactly the format AND protocol of example_inputs.vcd.
 
     1 ps timescale, 10 ns clock (posedge at 5 + 10k ns), every stimulus changing on the
-    negedge, rst_n released at 30 ns and enable asserted at 40 ns for len(bits) cycles.
-    `results` is the matching GateSim.run() output; when given, O[7:0] and success are
-    written too so the file shows the design's response.
+    negedge.  With the defaults this is the example's exact timing: rst_n released at
+    30 ns, one idle cycle, then enable asserted at 40 ns for len(bits) cycles.
+    `results` is the matching GateSim.run() output - simulate with the SAME
+    `idle_after_reset` (see sim.standard_stimulus) - and when given, O[7:0] and
+    success are written too so the file shows the design's response.
     """
     n = len(bits)
-    total = reset_cycles + n + tail
+    total = reset_cycles + idle_after_reset + n + tail
     syms = {"clk": "!", "rst_n": '"', "enable": "#", "I": "$", "O": "%", "success": "&"}
 
     def stim_at(cyc):
         if cyc < reset_cycles:
             return 0, 0, 0
-        k = cyc - reset_cycles
+        k = cyc - reset_cycles - idle_after_reset
+        if k < 0:
+            return 1, 0, 0
         return (1, 1, int(bits[k])) if k < n else (1, 0, 0)
 
     L = ["$date", "  gds2v vcdtool", "$end",
